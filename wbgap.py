@@ -25,6 +25,7 @@ SORT_QUERY_PARAMS = False
 TARGET_URL_FILE = "urls.txt"
 OUTPUT_FILE = "not_archived.txt"
 CACHE_FILE = "archived_cdx.json"
+ARCHIVED_FILE = "archived.txt"
 
 # User-Agent設定
 USER_AGENT = "Wayback-Gap-Detector/1.0 (https://github.com/example/wayback-gap-detector)"
@@ -309,6 +310,15 @@ def main():
         default=CACHE_FILE,
         help=f'キャッシュファイルのパス（デフォルト: {CACHE_FILE}）'
     )
+
+    parser.add_argument(
+        '--output-archived',
+        dest='output_archived',
+        nargs='?',
+        const=ARCHIVED_FILE,
+        default=None,
+        help=f'アーカイブ済みURLの出力ファイルパス（デフォルト: {ARCHIVED_FILE}）'
+    )
     
     args = parser.parse_args()
     
@@ -332,9 +342,21 @@ def main():
         args.sort_query
     )
 
-    # 入力URL数を再計算
+    # 入力URL数を再計算しつつ、アーカイブ済みURL（入力ファイル内のもの）を特定
+    confirmed_archived_urls = []
+    not_archived_set = set(not_archived)
+    
     with open(args.input_file, 'r', encoding='utf-8') as f:
-        input_url_count = sum(1 for line in f if line.strip())
+        input_url_count = 0
+        for line in f:
+            url = line.strip()
+            if not url:
+                continue
+            input_url_count += 1
+            
+            # 未アーカイブリストになければ、それはアーカイブ済み
+            if args.output_archived and url not in not_archived_set:
+                confirmed_archived_urls.append(url)
     
     # 結果の出力
     with open(args.output_file, 'w', encoding='utf-8') as f:
@@ -345,6 +367,12 @@ def main():
     print(f"調査対象URL数: {input_url_count}")
     print(f"未アーカイブ件数: {len(not_archived)}")
     print(f"\n結果を {args.output_file} に出力しました")
+
+    if args.output_archived:
+        with open(args.output_archived, 'w', encoding='utf-8') as f:
+            for url in confirmed_archived_urls:
+                f.write(url + '\n')
+        print(f"アーカイブ済みURL（入力ファイル内）を {args.output_archived} に出力しました: {len(confirmed_archived_urls)} 件")
 
 
 if __name__ == '__main__':
