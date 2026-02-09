@@ -14,6 +14,7 @@ from wbgap import (
     extract_archived_urls,
     detect_not_archived,
 )
+from exceptions import CDXAPIError, InputFileError
 
 
 class TestNormalizeUrl(unittest.TestCase):
@@ -122,6 +123,16 @@ class TestNormalizeUrl(unittest.TestCase):
         # プロトコル統一、小文字化、ポート削除、クエリソート、フラグメント削除
         expected = "http://example.com/Path?a=1&b=2"
         self.assertEqual(result, expected)
+    
+    def test_path_trailing_slash_equivalence(self):
+        """パス末尾スラッシュの同一性テスト"""
+        url1 = "https://example.com/path"
+        url2 = "https://example.com/path/"
+        result1 = normalize_url(url1, ignore_protocol=True, sort_query=False)
+        result2 = normalize_url(url2, ignore_protocol=True, sort_query=False)
+        # 末尾スラッシュが削除されて同一にURLになる
+        self.assertEqual(result1, result2)
+        self.assertEqual(result1, "http://example.com/path")
 
 
 class TestExtractArchivedUrls(unittest.TestCase):
@@ -151,6 +162,70 @@ class TestExtractArchivedUrls(unittest.TestCase):
         ]
         result = extract_archived_urls(cdx_data, ignore_protocol=True, sort_query=False)
         self.assertEqual(len(result), 0)
+
+
+class TestCDXRobustness(unittest.TestCase):
+    """空や異常なCDXレスポンスのテスト"""
+    
+    def test_empty_cdx_list(self):
+        """空CDXリスト（[]）の処理"""
+        result = extract_archived_urls([], ignore_protocol=True, sort_query=False)
+        self.assertEqual(len(result), 0)
+        self.assertIsInstance(result, set)
+    
+    def test_header_only_cdx(self):
+        """ヘッダーのみのCDXデータ"""
+        cdx_data = [
+            ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]
+        ]
+        result = extract_archived_urls(cdx_data, ignore_protocol=True, sort_query=False)
+        self.assertEqual(len(result), 0)
+    
+    def test_non_list_cdx_response(self):
+        """非リスト型のCDXレスポンス（dict, str, None）"""
+        # dict
+        result = extract_archived_urls({"error": "test"}, ignore_protocol=True, sort_query=False)
+        self.assertEqual(len(result), 0)
+        
+        # None
+        result = extract_archived_urls(None, ignore_protocol=True, sort_query=False)
+        self.assertEqual(len(result), 0)
+    
+    def test_invalid_header_row(self):
+        """ヘッダー行が文字列などの異常ケース"""
+        cdx_data = [
+            "invalid_header",  # 文字列
+            ["com,example)/page1", "20230101000000", "https://example.com/page1"]
+        ]
+        result = extract_archived_urls(cdx_data, ignore_protocol=True, sort_query=False)
+        self.assertEqual(len(result), 0)  # ヘッダーが無効なので空セット
+    
+    def test_invalid_data_rows(self):
+        """データ行に文字列が混入している場合"""
+        cdx_data = [
+            ["urlkey", "timestamp", "original"],
+            ["com,example)/page1", "20230101000000", "https://example.com/page1"],
+            "invalid row",  # 異常行
+            ["com,example)/page2", "20230102000000", "https://example.com/page2"],
+        ]
+        result = extract_archived_urls(cdx_data, ignore_protocol=True, sort_query=False)
+        # 無効な行はスキップされ、2件の有効なURLが抽出される
+        self.assertEqual(len(result), 2)
+
+
+class TestExceptions(unittest.TestCase):
+    """例外処理のテスト"""
+    
+    def test_input_file_not_found(self):
+        """入力ファイルが存在しない場合にInputFileErrorが発生"""
+        with self.assertRaises(InputFileError) as cm:
+            detect_not_archived(
+                "nonexistent_file.txt",
+                set(),
+                ignore_protocol=True,
+                sort_query=False
+            )
+        self.assertIn("入力ファイルが見つかりません", str(cm.exception))
 
 
 class TestDetectNotArchived(unittest.TestCase):
@@ -272,6 +347,8 @@ def run_tests():
     # すべてのテストクラスを追加
     suite.addTests(loader.loadTestsFromTestCase(TestNormalizeUrl))
     suite.addTests(loader.loadTestsFromTestCase(TestExtractArchivedUrls))
+    suite.addTests(loader.loadTestsFromTestCase(TestCDXRobustness))
+    suite.addTests(loader.loadTestsFromTestCase(TestExceptions))
     suite.addTests(loader.loadTestsFromTestCase(TestDetectNotArchived))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
     

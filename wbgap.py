@@ -9,12 +9,21 @@ Wayback Gap Detector
 import argparse
 import html
 import json
+import logging
 import os
 import sys
+from pathlib import Path
 from typing import Set, List, Optional
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
+
+from exceptions import CDXAPIError, InputFileError
+
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 
 # ========================================
@@ -119,19 +128,19 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
     Returns:
         CDX APIのJSONレスポンス（リスト形式）
     """
-
+    
     if os.path.exists(cache_file):
-        print(f"キャッシュファイルを読み込み中: {cache_file}")
+        logger.info(f"キャッシュファイルを読み込み中: {cache_file}")
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            print(f"キャッシュから {len(data)} 件のレコードを読み込みました")
+            logger.info(f"キャッシュから {len(data)} 件のレコードを読み込みました")
             return data
         except Exception as e:
-            print(f"キャッシュ読み込みエラー: {e}")
-            print("CDX APIから再取得します...")
+            logger.warning(f"キャッシュ読み込みエラー: {e}")
+            logger.info("CDX APIから再取得します...")
     
-    print(f"CDX APIからデータを取得中: {target_url}")
+    logger.info(f"CDX APIからデータを取得中: {target_url}")
     api_url = "https://web.archive.org/cdx/search/cdx"
     
     params = {
@@ -145,23 +154,46 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
         'User-Agent': USER_AGENT
     }
     
+    # SessionとRetry設定
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    
     try:
-        response = requests.get(api_url, params=params, headers=headers, timeout=60)
+        response = session.get(api_url, params=params, headers=headers, timeout=60)
         response.raise_for_status()
         data = response.json()
         
+        # CDXレスポンスの型チェック
+        if not isinstance(data, list):
+            raise CDXAPIError(
+                f"CDX APIが予期しない型のレスポンスを返しました: {type(data).__name__}. "
+                f"リストが期待されます。"
+            )
+        
+        if len(data) == 0:
+            logger.warning("CDX APIから空のレスポンスが返されました")
+        
+        # キャッシュディレクトリの自動作成
+        Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
-        print(f"CDX APIから {len(data)} 件のレコードを取得しました")
+        logger.info(f"CDX APIから {len(data)} 件のレコードを取得しました")
         return data
         
     except requests.exceptions.RequestException as e:
-        print(f"CDX API取得エラー: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise CDXAPIError(f"CDX API取得エラー: {e}") from e
     except json.JSONDecodeError as e:
-        print(f"JSONパースエラー: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise CDXAPIError(f"JSONパースエラー: {e}") from e
 
 
 def extract_archived_urls(cdx_data: List, ignore_protocol: bool,
@@ -177,19 +209,33 @@ def extract_archived_urls(cdx_data: List, ignore_protocol: bool,
     Returns:
         正規化されたURLの集合
     """
-    if not cdx_data or len(cdx_data) == 0:
+    if not cdx_data or not isinstance(cdx_data, list):
+        return set()
+    
+    # データが1行以下の場合はヘッダーのみか空
+    if len(cdx_data) <= 1:
         return set()
     
     header = cdx_data[0]
+    
+    # ヘッダー行がリストでない場合は異常
+    if not isinstance(header, list):
+        logger.warning(f"CDXヘッダー行が予期しない型です: {type(header).__name__}")
+        return set()
+    
     try:
         original_idx = header.index('original')
     except (ValueError, AttributeError):
-        print("警告: 'original'カラムが見つかりません。デフォルトインデックス2を使用します")
+        logger.warning("'original'カラムが見つかりません。デフォルトインデックス2を使用します")
         original_idx = 2
     
     archived_urls = set()
     
     for row in cdx_data[1:]:
+        # データ行がリストでない場合はスキップ
+        if not isinstance(row, list):
+            continue
+        
         if len(row) > original_idx:
             original_url = row[original_idx]
             normalized = normalize_url(original_url, ignore_protocol, sort_query)
@@ -216,8 +262,7 @@ def detect_not_archived(input_file: str, archived_urls: Set[str],
         未アーカイブURLのリスト（元の表記）
     """
     if not os.path.exists(input_file):
-        print(f"エラー: 入力ファイルが見つかりません: {input_file}", file=sys.stderr)
-        sys.exit(1)
+        raise InputFileError(f"入力ファイルが見つかりません: {input_file}")
     
     not_archived = []
     
@@ -235,7 +280,7 @@ def detect_not_archived(input_file: str, archived_urls: Set[str],
     return not_archived
 
 
-def main():
+def main() -> int:
     """メイン処理"""
     parser = argparse.ArgumentParser(
         description='Wayback Gap Detector - アーカイブされていないURLを検出',
@@ -310,53 +355,82 @@ def main():
         help=f'アーカイブ済みURLの出力ファイルパス（デフォルト: {ARCHIVED_FILE}）'
     )
     
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='詳細なログ出力を有効化 (DEBUGレベル)'
+    )
+    
     args = parser.parse_args()
     
-    cdx_data = fetch_cdx_data(args.target_url, args.cache_file)
-    
-    archived_urls = extract_archived_urls(
-        cdx_data,
-        args.ignore_protocol,
-        args.sort_query
+    # ロガー設定
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format='%(levelname)s: %(message)s'
     )
-    cdx_raw_count = len(cdx_data) - 1
-    print(f"\nCDX取得件数: {cdx_raw_count}")
     
-    not_archived = detect_not_archived(
-        args.input_file,
-        archived_urls,
-        args.ignore_protocol,
-        args.sort_query
-    )
+    try:
+        cdx_data = fetch_cdx_data(args.target_url, args.cache_file)
+        
+        archived_urls = extract_archived_urls(
+            cdx_data,
+            args.ignore_protocol,
+            args.sort_query
+        )
+        cdx_raw_count = max(0, len(cdx_data) - 1)
+        logger.info(f"CDX取得件数: {cdx_raw_count}")
+        
+        not_archived = detect_not_archived(
+            args.input_file,
+            archived_urls,
+            args.ignore_protocol,
+            args.sort_query
+        )
 
-    confirmed_archived_urls = []
-    not_archived_set = set(not_archived)
-    
-    with open(args.input_file, 'r', encoding='utf-8') as f:
-        input_url_count = 0
-        for line in f:
-            url = line.strip()
-            if not url:
-                continue
-            input_url_count += 1
-            
-            if args.output_archived and url not in not_archived_set:
-                confirmed_archived_urls.append(url)
-    
-    with open(args.output_file, 'w', encoding='utf-8') as f:
-        for url in not_archived:
-            f.write(url + '\n')
-    
-    print(f"調査対象URL数: {input_url_count}")
-    print(f"未アーカイブ件数: {len(not_archived)}")
-    print(f"\n結果を {args.output_file} に出力しました")
-
-    if args.output_archived:
-        with open(args.output_archived, 'w', encoding='utf-8') as f:
-            for url in confirmed_archived_urls:
+        confirmed_archived_urls = []
+        not_archived_set = set(not_archived)
+        
+        with open(args.input_file, 'r', encoding='utf-8') as f:
+            input_url_count = 0
+            for line in f:
+                url = line.strip()
+                if not url:
+                    continue
+                input_url_count += 1
+                
+                if args.output_archived and url not in not_archived_set:
+                    confirmed_archived_urls.append(url)
+        
+        # 出力ファイルの親ディレクトリを自動作成
+        Path(args.output_file).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.output_file, 'w', encoding='utf-8') as f:
+            for url in not_archived:
                 f.write(url + '\n')
-        print(f"アーカイブ済みURL（入力ファイル内）を {args.output_archived} に出力しました: {len(confirmed_archived_urls)} 件")
+        
+        logger.info(f"調査対象URL数: {input_url_count}")
+        logger.info(f"未アーカイブ件数: {len(not_archived)}")
+        logger.info(f"結果を {args.output_file} に出力しました")
+
+        if args.output_archived:
+            Path(args.output_archived).parent.mkdir(parents=True, exist_ok=True)
+            with open(args.output_archived, 'w', encoding='utf-8') as f:
+                for url in confirmed_archived_urls:
+                    f.write(url + '\n')
+            logger.info(f"アーカイブ済みURL（入力ファイル内）を {args.output_archived} に出力しました: {len(confirmed_archived_urls)} 件")
+        
+        return 0
+    
+    except CDXAPIError as e:
+        logger.error(f"{e}")
+        return 1
+    except InputFileError as e:
+        logger.error(f"{e}")
+        return 1
+    except Exception as e:
+        logger.error(f"予期しないエラー: {e}")
+        return 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
