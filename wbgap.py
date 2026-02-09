@@ -27,8 +27,7 @@ OUTPUT_FILE = "not_archived.txt"
 CACHE_FILE = "archived_cdx.json"
 ARCHIVED_FILE = "archived.txt"
 
-# User-Agent設定
-USER_AGENT = "Wayback-Gap-Detector/1.0 (https://github.com/example/wayback-gap-detector)"
+USER_AGENT = "Wayback-Gap-Detector/1.0 (https://github.com/c3974/wayback-gap-detector)"
 
 
 # ========================================
@@ -120,7 +119,7 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
     Returns:
         CDX APIのJSONレスポンス（リスト形式）
     """
-    # キャッシュが存在する場合は読み込む
+
     if os.path.exists(cache_file):
         print(f"キャッシュファイルを読み込み中: {cache_file}")
         try:
@@ -132,7 +131,6 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
             print(f"キャッシュ読み込みエラー: {e}")
             print("CDX APIから再取得します...")
     
-    # CDX APIからデータを取得
     print(f"CDX APIからデータを取得中: {target_url}")
     api_url = "http://web.archive.org/cdx/search/cdx"
     
@@ -140,7 +138,7 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
         'url': target_url,
         'output': 'json',
         'filter': 'statuscode:200',
-        'collapse': 'urlkey'  # 重複除去・最適化
+        'collapse': 'urlkey'
     }
     
     headers = {
@@ -152,7 +150,6 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
         response.raise_for_status()
         data = response.json()
         
-        # キャッシュに保存
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
@@ -183,18 +180,15 @@ def extract_archived_urls(cdx_data: List, ignore_protocol: bool,
     if not cdx_data or len(cdx_data) == 0:
         return set()
     
-    # ヘッダー行からoriginalカラムのインデックスを取得
     header = cdx_data[0]
     try:
         original_idx = header.index('original')
     except (ValueError, AttributeError):
-        # ヘッダーが見つからない場合はデフォルト値（通常は2）
         print("警告: 'original'カラムが見つかりません。デフォルトインデックス2を使用します")
         original_idx = 2
     
     archived_urls = set()
     
-    # ヘッダー行をスキップしてデータ行を処理
     for row in cdx_data[1:]:
         if len(row) > original_idx:
             original_url = row[original_idx]
@@ -233,11 +227,9 @@ def detect_not_archived(input_file: str, archived_urls: Set[str],
             if not original_url:
                 continue
             
-            # 正規化して比較
             normalized = normalize_url(original_url, ignore_protocol, sort_query)
             
             if normalized not in archived_urls:
-                # 元のURLを結果に追加
                 not_archived.append(original_url)
     
     return not_archived
@@ -255,13 +247,11 @@ def main():
         '''
     )
     
-    # 必須引数
     parser.add_argument(
         'target_url',
         help='CDX検索対象のワイルドカードURL（例: https://example.com/path/*）'
     )
     
-    # オプション引数
     parser.add_argument(
         '--ignore-protocol',
         dest='ignore_protocol',
@@ -322,10 +312,8 @@ def main():
     
     args = parser.parse_args()
     
-    # CDXデータの取得
     cdx_data = fetch_cdx_data(args.target_url, args.cache_file)
     
-    # アーカイブ済みURLの抽出
     archived_urls = extract_archived_urls(
         cdx_data,
         args.ignore_protocol,
@@ -334,7 +322,6 @@ def main():
     cdx_raw_count = len(cdx_data) - 1
     print(f"\nCDX取得件数: {cdx_raw_count}")
     
-    # 未アーカイブURLの検出
     not_archived = detect_not_archived(
         args.input_file,
         archived_urls,
@@ -342,7 +329,6 @@ def main():
         args.sort_query
     )
 
-    # 入力URL数を再計算しつつ、アーカイブ済みURL（入力ファイル内のもの）を特定
     confirmed_archived_urls = []
     not_archived_set = set(not_archived)
     
@@ -354,16 +340,13 @@ def main():
                 continue
             input_url_count += 1
             
-            # 未アーカイブリストになければ、それはアーカイブ済み
             if args.output_archived and url not in not_archived_set:
                 confirmed_archived_urls.append(url)
     
-    # 結果の出力
     with open(args.output_file, 'w', encoding='utf-8') as f:
         for url in not_archived:
             f.write(url + '\n')
     
-    # コンソール出力
     print(f"調査対象URL数: {input_url_count}")
     print(f"未アーカイブ件数: {len(not_archived)}")
     print(f"\n結果を {args.output_file} に出力しました")
