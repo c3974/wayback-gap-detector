@@ -132,7 +132,7 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
             print("CDX APIから再取得します...")
     
     print(f"CDX APIからデータを取得中: {target_url}")
-    api_url = "http://web.archive.org/cdx/search/cdx"
+    api_url = "https://web.archive.org/cdx/search/cdx"
     
     params = {
         'url': target_url,
