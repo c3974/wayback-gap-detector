@@ -168,7 +168,7 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
     session.mount("http://", adapter)
     
     try:
-        response = session.get(api_url, params=params, headers=headers, timeout=60)
+        response = session.get(api_url, params=params, headers=headers, timeout=600)
         response.raise_for_status()
         data = response.json()
         
