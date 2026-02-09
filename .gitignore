@@ -27,6 +27,7 @@ wheels/
 
 # Data & Output (Project Specific)
 urls.txt
+archived*.txt
 not_archived*.txt
 archived*.json
 test_*.txt
