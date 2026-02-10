@@ -33,7 +33,7 @@ IGNORE_PROTOCOL = True
 SORT_QUERY_PARAMS = False
 TARGET_URL_FILE = "urls.txt"
 OUTPUT_FILE = "not_archived.txt"
-CACHE_FILE = "archived_cdx.json"
+CACHE_FILE = "archived_cdx.jsonl"
 ARCHIVED_FILE = "archived.txt"
 
 USER_AGENT = "Wayback-Gap-Detector/1.0 (https://github.com/c3974/wayback-gap-detector)"
@@ -132,8 +132,29 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
     if os.path.exists(cache_file):
         logger.info(f"キャッシュファイルを読み込み中: {cache_file}")
         try:
+            data = []
             with open(cache_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+                first_line = f.readline().strip()
+                f.seek(0)
+                
+                # Detect format: JSON array or JSONL
+                # JSON array: starts with '[' and second char is typically newline/whitespace or '{'/object
+                # JSONL: each line is a complete JSON (array/object), multiple lines
+                try:
+                    # Try to parse first line as complete JSON
+                    first_obj = json.loads(first_line)
+                    # If successful, it's JSONL (each line is complete JSON)
+                    f.seek(0)
+                    for line in f:
+                        if line.strip():
+                            data.append(json.loads(line))
+                    logger.info(f"JSONL形式のキャッシュを読み込みました")
+                except json.JSONDecodeError:
+                    # If first line alone is not valid JSON, it's likely JSON array format
+                    f.seek(0)
+                    data = json.load(f)
+                    logger.info("旧形式(JSON)のキャッシュを読み込みました")
+            
             logger.info(f"キャッシュから {len(data)} 件のレコードを読み込みました")
             return data
         except Exception as e:
@@ -184,10 +205,13 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
         
         # キャッシュディレクトリの自動作成
         Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"CDX APIから {len(data)} 件のレコードを取得しました")
+        # JSONL形式で保存
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            for row in data:
+                f.write(json.dumps(row, ensure_ascii=False) + '\n')
+        
+        logger.info(f"CDX APIから {len(data)} 件のレコードを取得しました（JSONL形式で保存）")
         return data
         
     except requests.exceptions.RequestException as e:

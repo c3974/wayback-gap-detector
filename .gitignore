@@ -30,6 +30,7 @@ urls.txt
 archived*.txt
 not_archived*.txt
 archived*.json
+archived*.jsonl
 test_*.txt
 *.log
 

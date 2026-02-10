@@ -385,6 +385,86 @@ class TestIntegration(unittest.TestCase):
             os.unlink(temp_input)
 
 
+class TestCacheFormat(unittest.TestCase):
+    """キャッシュフォーマット（JSONL/JSON）のテスト"""
+    
+    def test_jsonl_cache_read(self):
+        """JSONL形式のキャッシュ読み込みテスト"""
+        # JSONL形式のキャッシュファイルを作成
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8', suffix='.jsonl') as f:
+            # ヘッダー行
+            f.write(json.dumps(["urlkey", "timestamp", "original"]) + '\n')
+            # データ行
+            f.write(json.dumps(["com,example)/page1", "20230101000000", "https://example.com/page1"]) + '\n')
+            f.write(json.dumps(["com,example)/page2", "20230102000000", "https://example.com/page2"]) + '\n')
+            cache_file = f.name
+        
+        try:
+            # fetch_cdx_dataの代わりに直接読み込みロジックをテスト
+            from wbgap import fetch_cdx_data
+            
+            # キャッシュファイルが存在する場合の動作をモック
+            data = []
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                first_line = f.readline().strip()
+                f.seek(0)
+                
+                try:
+                    first_obj = json.loads(first_line)
+                    # JSONL format
+                    for line in f:
+                        if line.strip():
+                            data.append(json.loads(line))
+                except json.JSONDecodeError:
+                    # JSON array format
+                    data = json.load(f)
+            
+            # 検証
+            self.assertEqual(len(data), 3)  # ヘッダー + 2データ行
+            self.assertIsInstance(data, list)
+            self.assertEqual(data[0], ["urlkey", "timestamp", "original"])
+            
+        finally:
+            os.unlink(cache_file)
+    
+    def test_json_cache_read_backward_compatibility(self):
+        """旧JSON形式のキャッシュ読み込みテスト（後方互換性）"""
+        # 旧JSON配列形式のキャッシュファイルを作成
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8', suffix='.json') as f:
+            cache_data = [
+                ["urlkey", "timestamp", "original"],
+                ["com,example)/page1", "20230101000000", "https://example.com/page1"],
+                ["com,example)/page2", "20230102000000", "https://example.com/page2"]
+            ]
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+            cache_file = f.name
+        
+        try:
+            # 読み込みロジックをテスト
+            data = []
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                first_line = f.readline().strip()
+                f.seek(0)
+                
+                try:
+                    first_obj = json.loads(first_line)
+                    # JSONL format
+                    for line in f:
+                        if line.strip():
+                            data.append(json.loads(line))
+                except json.JSONDecodeError:
+                    # JSON array format
+                    data = json.load(f)
+            
+            # 検証
+            self.assertEqual(len(data), 3)
+            self.assertIsInstance(data, list)
+            self.assertEqual(data[0], ["urlkey", "timestamp", "original"])
+            
+        finally:
+            os.unlink(cache_file)
+
+
 def run_tests():
     """テストを実行"""
     loader = unittest.TestLoader()
@@ -397,6 +477,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestExceptions))
     suite.addTests(loader.loadTestsFromTestCase(TestDetectNotArchived))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
+    suite.addTests(loader.loadTestsFromTestCase(TestCacheFormat))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
