@@ -248,7 +248,8 @@ def extract_archived_urls(cdx_data: List, ignore_protocol: bool,
 # メイン処理
 # ========================================
 def detect_not_archived(input_file: str, archived_urls: Set[str],
-                        ignore_protocol: bool, sort_query: bool) -> List[str]:
+                        ignore_protocol: bool, sort_query: bool,
+                        collect_archived: bool = False) -> tuple[List[str], Optional[List[str]], int]:
     """
     入力ファイルから未アーカイブURLを検出
     
@@ -257,27 +258,35 @@ def detect_not_archived(input_file: str, archived_urls: Set[str],
         archived_urls: アーカイブ済みURLの集合（正規化済み）
         ignore_protocol: プロトコル無視フラグ
         sort_query: クエリソートフラグ
+        collect_archived: アーカイブ済みURLも収集するか（デフォルト: False）
     
     Returns:
-        未アーカイブURLのリスト（元の表記）
+        tuple: (未アーカイブURLリスト, アーカイブ済みURLリストまたはNone, 入力URL総数)
     """
     if not os.path.exists(input_file):
         raise InputFileError(f"入力ファイルが見つかりません: {input_file}")
     
     not_archived = []
+    archived = [] if collect_archived else None
+    total_count = 0
     
     with open(input_file, 'r', encoding='utf-8') as f:
         for line in f:
             original_url = line.strip()
+
             if not original_url:
                 continue
+
+            total_count += 1
             
             normalized = normalize_url(original_url, ignore_protocol, sort_query)
             
             if normalized not in archived_urls:
                 not_archived.append(original_url)
+            elif collect_archived:
+                archived.append(original_url)
     
-    return not_archived
+    return not_archived, archived, total_count
 
 
 def main() -> int:
@@ -381,26 +390,13 @@ def main() -> int:
         cdx_raw_count = max(0, len(cdx_data) - 1)
         logger.info(f"CDX取得件数: {cdx_raw_count}")
         
-        not_archived = detect_not_archived(
+        not_archived, archived, total_count = detect_not_archived(
             args.input_file,
             archived_urls,
             args.ignore_protocol,
-            args.sort_query
+            args.sort_query,
+            collect_archived=bool(args.output_archived)
         )
-
-        confirmed_archived_urls = []
-        not_archived_set = set(not_archived)
-        
-        with open(args.input_file, 'r', encoding='utf-8') as f:
-            input_url_count = 0
-            for line in f:
-                url = line.strip()
-                if not url:
-                    continue
-                input_url_count += 1
-                
-                if args.output_archived and url not in not_archived_set:
-                    confirmed_archived_urls.append(url)
         
         # 出力ファイルの親ディレクトリを自動作成
         Path(args.output_file).parent.mkdir(parents=True, exist_ok=True)
@@ -408,16 +404,16 @@ def main() -> int:
             for url in not_archived:
                 f.write(url + '\n')
         
-        logger.info(f"調査対象URL数: {input_url_count}")
+        logger.info(f"調査対象URL数: {total_count}")
         logger.info(f"未アーカイブ件数: {len(not_archived)}")
         logger.info(f"結果を {args.output_file} に出力しました")
 
-        if args.output_archived:
+        if args.output_archived and archived is not None:
             Path(args.output_archived).parent.mkdir(parents=True, exist_ok=True)
             with open(args.output_archived, 'w', encoding='utf-8') as f:
-                for url in confirmed_archived_urls:
+                for url in archived:
                     f.write(url + '\n')
-            logger.info(f"アーカイブ済みURL（入力ファイル内）を {args.output_archived} に出力しました: {len(confirmed_archived_urls)} 件")
+            logger.info(f"アーカイブ済みURLを {args.output_archived} に出力しました: {len(archived)} 件")
         
         return 0
     

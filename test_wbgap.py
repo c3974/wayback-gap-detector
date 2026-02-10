@@ -223,7 +223,8 @@ class TestExceptions(unittest.TestCase):
                 "nonexistent_file.txt",
                 set(),
                 ignore_protocol=True,
-                sort_query=False
+                sort_query=False,
+                collect_archived=False
             )
         self.assertIn("入力ファイルが見つかりません", str(cm.exception))
 
@@ -250,11 +251,12 @@ class TestDetectNotArchived(unittest.TestCase):
             normalize_url("https://example.com/page2", True, False),
             normalize_url("https://example.com/page3", True, False),
         }
-        result = detect_not_archived(
+        result, _, _ = detect_not_archived(
             self.temp_file.name,
             archived_urls,
             ignore_protocol=True,
-            sort_query=False
+            sort_query=False,
+            collect_archived=False
         )
         self.assertEqual(len(result), 0)
     
@@ -263,11 +265,12 @@ class TestDetectNotArchived(unittest.TestCase):
         archived_urls = {
             normalize_url("https://example.com/page1", True, False),
         }
-        result = detect_not_archived(
+        result, _, _ = detect_not_archived(
             self.temp_file.name,
             archived_urls,
             ignore_protocol=True,
-            sort_query=False
+            sort_query=False,
+            collect_archived=False
         )
         self.assertEqual(len(result), 2)
         self.assertIn("https://example.com/page2", result)
@@ -276,11 +279,12 @@ class TestDetectNotArchived(unittest.TestCase):
     def test_all_not_archived(self):
         """すべて未アーカイブの場合"""
         archived_urls = set()
-        result = detect_not_archived(
+        result, _, _ = detect_not_archived(
             self.temp_file.name,
             archived_urls,
             ignore_protocol=True,
-            sort_query=False
+            sort_query=False,
+            collect_archived=False
         )
         self.assertEqual(len(result), 3)
     
@@ -289,15 +293,56 @@ class TestDetectNotArchived(unittest.TestCase):
         archived_urls = {
             normalize_url("http://example.com/page1", True, False),  # httpでアーカイブ
         }
-        result = detect_not_archived(
+        result, _, _ = detect_not_archived(
             self.temp_file.name,
             archived_urls,
             ignore_protocol=True,  # プロトコル無視有効
-            sort_query=False
+            sort_query=False,
+            collect_archived=False
         )
         # https://example.com/page1 もアーカイブ済みとみなされる
         self.assertEqual(len(result), 2)
         self.assertNotIn("https://example.com/page1", result)
+
+    def test_collect_archived_enabled(self):
+        """アーカイブ済みURL収集機能のテスト"""
+        archived_urls = {
+            normalize_url("https://example.com/page1", True, False),
+        }
+        not_archived, archived, total_count = detect_not_archived(
+            self.temp_file.name,
+            archived_urls,
+            ignore_protocol=True,
+            sort_query=False,
+            collect_archived=True  # アーカイブ済みも収集
+        )
+        
+        # 合計3件の入力URL
+        self.assertEqual(total_count, 3)
+        # 1件がアーカイブ済み
+        self.assertEqual(len(archived), 1)
+        self.assertIn("https://example.com/page1", archived)
+        # 2件が未アーカイブ
+        self.assertEqual(len(not_archived), 2)
+
+    def test_collect_archived_disabled(self):
+        """アーカイブ済みURL収集なしのテスト"""
+        archived_urls = {
+            normalize_url("https://example.com/page1", True, False),
+        }
+        not_archived, archived, total_count = detect_not_archived(
+            self.temp_file.name,
+            archived_urls,
+            ignore_protocol=True,
+            sort_query=False,
+            collect_archived=False  # 収集しない
+        )
+        
+        # archivedはNone
+        self.assertIsNone(archived)
+        # total_countとnot_archivedは正しい
+        self.assertEqual(total_count, 3)
+        self.assertEqual(len(not_archived), 2)
 
 
 class TestIntegration(unittest.TestCase):
@@ -324,11 +369,12 @@ class TestIntegration(unittest.TestCase):
         
         try:
             # 未アーカイブ検出
-            not_archived = detect_not_archived(
+            not_archived, _, _ = detect_not_archived(
                 temp_input,
                 archived,
                 ignore_protocol=True,
-                sort_query=False
+                sort_query=False,
+                collect_archived=False
             )
             
             # 検証
