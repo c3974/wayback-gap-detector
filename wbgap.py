@@ -61,10 +61,14 @@ def normalize_url(url: str, ignore_protocol: bool = IGNORE_PROTOCOL,
     # 2. HTML実体参照のデコード
     url = html.unescape(url)
     
-    # 3. URLをパース
+    # 3. スキームが無い場合は http:// を補完
+    if '://' not in url:
+        url = 'http://' + url
+    
+    # 4. URLをパース
     parsed = urlparse(url)
     
-    # 4. スキームの正規化
+    # 5. スキームの正規化
     original_scheme = parsed.scheme.lower()
     scheme = original_scheme
     if ignore_protocol and scheme in ('http', 'https'):
@@ -132,31 +136,14 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
     if os.path.exists(cache_file):
         logger.info(f"キャッシュファイルを読み込み中: {cache_file}")
         try:
-            data = []
+            lines = []
             with open(cache_file, 'r', encoding='utf-8') as f:
-                first_line = f.readline().strip()
-                f.seek(0)
-                
-                # Detect format: JSON array or JSONL
-                # JSON array: starts with '[' and second char is typically newline/whitespace or '{'/object
-                # JSONL: each line is a complete JSON (array/object), multiple lines
-                try:
-                    # Try to parse first line as complete JSON
-                    first_obj = json.loads(first_line)
-                    # If successful, it's JSONL (each line is complete JSON)
-                    f.seek(0)
-                    for line in f:
-                        if line.strip():
-                            data.append(json.loads(line))
-                    logger.info(f"JSONL形式のキャッシュを読み込みました")
-                except json.JSONDecodeError:
-                    # If first line alone is not valid JSON, it's likely JSON array format
-                    f.seek(0)
-                    data = json.load(f)
-                    logger.info("旧形式(JSON)のキャッシュを読み込みました")
-            
-            logger.info(f"キャッシュから {len(data)} 件のレコードを読み込みました")
-            return data
+                logger.info("JSONL形式のキャッシュを読み込みます")
+                for line in f:
+                    if line.strip():
+                        lines.append(json.loads(line))
+            logger.info("JSONLキャッシュからデータを読み込みました")
+            return lines
         except Exception as e:
             logger.warning(f"キャッシュ読み込みエラー: {e}")
             logger.info("CDX APIから再取得します...")
@@ -168,7 +155,8 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
         'url': target_url,
         'output': 'json',
         'filter': 'statuscode:200',
-        'collapse': 'urlkey'
+        'collapse': 'urlkey',
+        'fl': 'original,timestamp'
     }
     
     headers = {
@@ -193,7 +181,6 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
         response.raise_for_status()
         data = response.json()
         
-        # CDXレスポンスの型チェック
         if not isinstance(data, list):
             raise CDXAPIError(
                 f"CDX APIが予期しない型のレスポンスを返しました: {type(data).__name__}. "
@@ -203,10 +190,8 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> List:
         if len(data) == 0:
             logger.warning("CDX APIから空のレスポンスが返されました")
         
-        # キャッシュディレクトリの自動作成
         Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
         
-        # JSONL形式で保存
         with open(cache_file, 'w', encoding='utf-8') as f:
             for row in data:
                 f.write(json.dumps(row, ensure_ascii=False) + '\n')
@@ -233,37 +218,47 @@ def extract_archived_urls(cdx_data: List, ignore_protocol: bool,
     Returns:
         正規化されたURLの集合
     """
-    if not cdx_data or not isinstance(cdx_data, list):
+    # cdx_dataがlistでない場合は早期return（test_non_list_cdx_response対応）
+    if not isinstance(cdx_data, list):
+        logger.warning(f"cdx_dataがlist型ではありません: {type(cdx_data).__name__}")
         return set()
-    
-    # データが1行以下の場合はヘッダーのみか空
-    if len(cdx_data) <= 1:
-        return set()
-    
-    header = cdx_data[0]
-    
-    # ヘッダー行がリストでない場合は異常
-    if not isinstance(header, list):
-        logger.warning(f"CDXヘッダー行が予期しない型です: {type(header).__name__}")
-        return set()
-    
-    try:
-        original_idx = header.index('original')
-    except (ValueError, AttributeError):
-        logger.warning("'original'カラムが見つかりません。デフォルトインデックス2を使用します")
-        original_idx = 2
     
     archived_urls = set()
+    original_idx = None
+    is_first_row = True
     
-    for row in cdx_data[1:]:
-        # データ行がリストでない場合はスキップ
+    for row in cdx_data:
+        # 行がlistでない場合はスキップして続行（異常行を無視）
         if not isinstance(row, list):
+            logger.debug(f"非list行をスキップ: {type(row).__name__}")
             continue
         
-        if len(row) > original_idx:
+        # 空行をスキップ
+        if not row:
+            continue
+        
+        # ヘッダー行の検出と処理
+        if is_first_row or (row and row[0] in ('original', 'urlkey')):
+            is_first_row = False
+            
+            # ヘッダー行から original カラムのインデックスを取得
+            try:
+                original_idx = row.index('original')
+                logger.debug(f"originalカラムのインデックス: {original_idx}")
+            except ValueError:
+                # fl=original,timestamp の場合、通常は0番目
+                logger.warning("'original'カラムが見つかりません。インデックス0を使用します")
+                original_idx = 0
+            continue  # ヘッダー行はスキップ
+        
+        # データ行の処理
+        if original_idx is not None and len(row) > original_idx:
             original_url = row[original_idx]
-            normalized = normalize_url(original_url, ignore_protocol, sort_query)
-            archived_urls.add(normalized)
+            
+            # URL が文字列であることを確認
+            if isinstance(original_url, str):
+                normalized = normalize_url(original_url, ignore_protocol, sort_query)
+                archived_urls.add(normalized)
     
     return archived_urls
 

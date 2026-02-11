@@ -13,8 +13,10 @@ from wbgap import (
     normalize_url,
     extract_archived_urls,
     detect_not_archived,
+    fetch_cdx_data,
 )
 from exceptions import CDXAPIError, InputFileError
+from unittest.mock import patch, MagicMock
 
 
 class TestNormalizeUrl(unittest.TestCase):
@@ -384,85 +386,105 @@ class TestIntegration(unittest.TestCase):
         finally:
             os.unlink(temp_input)
 
+class TestAdditionalFeatures(unittest.TestCase):
+    """追加テスト - wbgap.pyの修正に対応するテスト関数（unittest版）"""
 
-class TestCacheFormat(unittest.TestCase):
-    """キャッシュフォーマット（JSONL/JSON）のテスト"""
-    
-    def test_jsonl_cache_read(self):
-        """JSONL形式のキャッシュ読み込みテスト"""
-        # JSONL形式のキャッシュファイルを作成
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8', suffix='.jsonl') as f:
-            # ヘッダー行
-            f.write(json.dumps(["urlkey", "timestamp", "original"]) + '\n')
-            # データ行
-            f.write(json.dumps(["com,example)/page1", "20230101000000", "https://example.com/page1"]) + '\n')
-            f.write(json.dumps(["com,example)/page2", "20230102000000", "https://example.com/page2"]) + '\n')
-            cache_file = f.name
+    def test_non_list_cdx_response_none(self):
+        """cdx_dataがNoneの場合、空setを返す"""
+        self.assertEqual(extract_archived_urls(None, ignore_protocol=True, sort_query=False), set())
+
+    def test_non_list_cdx_response_dict(self):
+        """cdx_dataがdictの場合、空setを返す"""
+        self.assertEqual(extract_archived_urls({"foo": "bar"}, ignore_protocol=True, sort_query=False), set())
+
+    def test_non_list_cdx_response_string(self):
+        """cdx_dataが文字列の場合、空setを返す"""
+        self.assertEqual(extract_archived_urls("invalid", ignore_protocol=True, sort_query=False), set())
+
+    def test_extract_with_mixed_row_types(self):
+        """CDXデータに異なる型の行が混在する場合、list行のみ処理する"""
+        cdx = [
+            ["original", "timestamp"],  # ヘッダー
+            {"bad": "row"},  # 異常行（dict）
+            ["http://a.example/", "20200101"],  # 正常行
+            "invalid_string",  # 異常行（str）
+            ["https://b/", "20200202"]  # 正常行
+        ]
+        res = extract_archived_urls(cdx, ignore_protocol=True, sort_query=False)
+        self.assertTrue(any("a.example" in u for u in res))
+        self.assertTrue(any("b/" in u for u in res))
+        self.assertEqual(len(res), 2)
+
+    def test_fetch_cdx_reads_jsonl(self):
+        """キャッシュファイル（JSONL形式）を正しく読み込み、listを返す"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
+            f.write('["original","timestamp"]\n["http://x/","20200101"]\n')
+            cache_path = f.name
         
         try:
-            # fetch_cdx_dataの代わりに直接読み込みロジックをテスト
-            from wbgap import fetch_cdx_data
+            data = fetch_cdx_data("x", cache_path)
             
-            # キャッシュファイルが存在する場合の動作をモック
-            data = []
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                first_line = f.readline().strip()
-                f.seek(0)
-                
-                try:
-                    first_obj = json.loads(first_line)
-                    # JSONL format
-                    for line in f:
-                        if line.strip():
-                            data.append(json.loads(line))
-                except json.JSONDecodeError:
-                    # JSON array format
-                    data = json.load(f)
-            
-            # 検証
-            self.assertEqual(len(data), 3)  # ヘッダー + 2データ行
+            # 返り値がlistであることを確認
             self.assertIsInstance(data, list)
-            self.assertEqual(data[0], ["urlkey", "timestamp", "original"])
-            
+            # 各要素もlistであることを確認
+            self.assertTrue(all(isinstance(row, list) for row in data))
+            # 2行読み込まれたことを確認
+            self.assertEqual(len(data), 2)
         finally:
-            os.unlink(cache_file)
-    
-    def test_json_cache_read_backward_compatibility(self):
-        """旧JSON形式のキャッシュ読み込みテスト（後方互換性）"""
-        # 旧JSON配列形式のキャッシュファイルを作成
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8', suffix='.json') as f:
-            cache_data = [
-                ["urlkey", "timestamp", "original"],
-                ["com,example)/page1", "20230101000000", "https://example.com/page1"],
-                ["com,example)/page2", "20230102000000", "https://example.com/page2"]
-            ]
-            json.dump(cache_data, f, ensure_ascii=False, indent=2)
-            cache_file = f.name
+            if os.path.exists(cache_path):
+                os.unlink(cache_path)
+
+    @patch('requests.Session')
+    def test_fetch_cdx_cache_corrupt_fallback(self, mock_session_cls):
+        """キャッシュが壊れている場合、fetch_cdx_dataはAPI呼び出しにフォールバックする"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
+            f.write('NOT-JSON\n')
+            cache_path = f.name
+            
+        # APIモックの設定
+        mock_response = MagicMock()
+        mock_response.json.return_value = [["original", "timestamp"], ["http://ok/", "20200101"]]
+        mock_response.raise_for_status.return_value = None
+        
+        mock_session = mock_session_cls.return_value
+        mock_session.get.return_value = mock_response
         
         try:
-            # 読み込みロジックをテスト
-            data = []
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                first_line = f.readline().strip()
-                f.seek(0)
-                
-                try:
-                    first_obj = json.loads(first_line)
-                    # JSONL format
-                    for line in f:
-                        if line.strip():
-                            data.append(json.loads(line))
-                except json.JSONDecodeError:
-                    # JSON array format
-                    data = json.load(f)
+            data = fetch_cdx_data("ok", cache_path)
             
-            # 検証
-            self.assertEqual(len(data), 3)
+            # APIが呼ばれたことを確認 (getメソッドが呼ばれたか)
+            mock_session.get.assert_called()
+            
+            # 結果がlistであることを確認
             self.assertIsInstance(data, list)
-            self.assertEqual(data[0], ["urlkey", "timestamp", "original"])
+            # データが返されたことを確認
+            self.assertTrue(any("ok/" in str(row) for row in data))
             
         finally:
-            os.unlink(cache_file)
+            if os.path.exists(cache_path):
+                os.unlink(cache_path)
+
+    def test_extract_no_original_column_uses_index_0(self):
+        """'original'カラムがない場合、index 0を使用する"""
+        cdx = [
+            ["url", "timestamp"],  # originalではなくurlというヘッダー
+            ["http://test.example/", "20200101"]
+        ]
+        res = extract_archived_urls(cdx, ignore_protocol=True, sort_query=False)
+        # index 0が使われるので"http://test.example/"が抽出される
+        self.assertTrue(any("test.example" in u for u in res))
+
+    def test_extract_empty_rows_skipped(self):
+        """空行が含まれる場合でも正常に処理される"""
+        cdx = [
+            ["original", "timestamp"],
+            [],  # 空行
+            ["http://valid.example/", "20200101"],
+            [],  # 空行
+        ]
+        res = extract_archived_urls(cdx, ignore_protocol=True, sort_query=False)
+        self.assertEqual(len(res), 1)
+        self.assertTrue(any("valid.example" in u for u in res))
 
 
 def run_tests():
@@ -477,7 +499,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestExceptions))
     suite.addTests(loader.loadTestsFromTestCase(TestDetectNotArchived))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
-    suite.addTests(loader.loadTestsFromTestCase(TestCacheFormat))
+    suite.addTests(loader.loadTestsFromTestCase(TestAdditionalFeatures))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
