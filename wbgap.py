@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Set, List, Optional
+from typing import Set, List, Optional, Generator, Iterable
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
@@ -38,6 +38,7 @@ ARCHIVED_FILE = "archived.txt"
 
 USER_AGENT = "Wayback-Gap-Detector/1.0 (https://github.com/c3974/wayback-gap-detector)"
 
+CDX_LIMIT = 25000
 
 # ========================================
 # URL正規化関数
@@ -121,91 +122,176 @@ def normalize_url(url: str, ignore_protocol: bool = IGNORE_PROTOCOL,
 # ========================================
 # CDX API関連
 # ========================================
-def fetch_cdx_data(target_url: str, cache_file: str) -> List:
+def fetch_cdx_data(target_url: str, cache_file: str) -> Generator[List, None, None]:
     """
     CDX APIからデータを取得、またはキャッシュから読み込む
+    Yields CDX records one by one.
+    Uses resumeKey pagination for large datasets.
     
     Args:
         target_url: 検索対象のワイルドカードURL
         cache_file: キャッシュファイルのパス
     
-    Returns:
-        CDX APIのJSONレスポンス（リスト形式）
+    Yields:
+        CDX record (List)
     """
     
-    if os.path.exists(cache_file):
-        logger.info(f"キャッシュファイルを読み込み中: {cache_file}")
+    cache_valid = False
+    if os.path.exists(cache_file) and os.path.getsize(cache_file) > 0:
+        logger.info(f"キャッシュから読み込み中: {cache_file}")
         try:
-            lines = []
             with open(cache_file, 'r', encoding='utf-8') as f:
-                logger.info("JSONL形式のキャッシュを読み込みます")
-                for line in f:
-                    if line.strip():
-                        lines.append(json.loads(line))
-            logger.info("JSONLキャッシュからデータを読み込みました")
-            return lines
-        except Exception as e:
+                first_line = f.readline().strip()
+                if first_line:
+                    json.loads(first_line)  # パース可能かチェック
+                    cache_valid = True
+        except (json.JSONDecodeError, Exception) as e:
             logger.warning(f"キャッシュ読み込みエラー: {e}")
             logger.info("CDX APIから再取得します...")
-    
-    logger.info(f"CDX APIからデータを取得中: {target_url}")
-    api_url = "https://web.archive.org/cdx/search/cdx"
-    
-    params = {
-        'url': target_url,
-        'output': 'json',
-        'filter': 'statuscode:200',
-        'collapse': 'urlkey',
-        'fl': 'original,timestamp'
-    }
-    
-    headers = {
-        'User-Agent': USER_AGENT
-    }
-    
-    # SessionとRetry設定
-    session = requests.Session()
-    retry = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-        raise_on_status=False
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    
-    try:
-        response = session.get(api_url, params=params, headers=headers, timeout=600)
-        response.raise_for_status()
-        data = response.json()
+            cache_valid = False
+
+    if cache_valid:
+        def _read_cache():
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped:
+                        yield json.loads(stripped)
+            logger.info("JSONLキャッシュから全データをyieldしました")
         
-        if not isinstance(data, list):
-            raise CDXAPIError(
-                f"CDX APIが予期しない型のレスポンスを返しました: {type(data).__name__}. "
-                f"リストが期待されます。"
-            )
+        # Generatorを返す
+        return _read_cache()
+
+    # API Fetch Mode - ストリーミング取得（遅延評価、メモリ効率的）
+    def _fetch_from_api():
+        """APIからストリーミング取得（Generator）"""
+        logger.info(f"CDX APIからデータを取得中: {target_url}")
         
-        if len(data) == 0:
-            logger.warning("CDX APIから空のレスポンスが返されました")
-        
+        api_url = "https://web.archive.org/cdx/search/cdx"
+        params = {
+            'url': target_url,
+            'output': 'json',
+            'filter': 'statuscode:200',
+            'collapse': 'urlkey',
+            'fl': 'original,timestamp',
+            'showResumeKey': 'true',
+            'limit': CDX_LIMIT
+        }
+        headers = {'User-Agent': USER_AGENT}
+    
+        # SessionとRetry設定
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET"],
+            raise_on_status=False
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        # キャッシュファイルの親ディレクトリを作成
         Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
         
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            for row in data:
-                f.write(json.dumps(row, ensure_ascii=False) + '\n')
-        
-        logger.info(f"CDX APIから {len(data)} 件のレコードを取得しました（JSONL形式で保存）")
-        return data
-        
-    except requests.exceptions.RequestException as e:
-        raise CDXAPIError(f"CDX API取得エラー: {e}") from e
-    except json.JSONDecodeError as e:
-        raise CDXAPIError(f"JSONパースエラー: {e}") from e
+        cache_f = None
+        try:
+            cache_f = open(cache_file, 'w', encoding='utf-8')
+            resume_key = None
+            seen_resume_keys = set()      # リクエストに使ったresumeKey（循環検出）
+            seen_response_keys = set()    # レスポンスが返したresumeKey（重複防止）
+            total_yielded = 0
+
+            while True:
+                if resume_key:
+                    # resumeKey循環検出
+                    if resume_key in seen_resume_keys:
+                        logger.warning(f"resumeKey循環検出:（リクエスト側） {resume_key}")
+                        logger.info("無限ループ防止のため、ページネーションを終了します")
+                        break
+                    seen_resume_keys.add(resume_key)
+                    params['resumeKey'] = resume_key
+
+                try:
+                    response = session.get(api_url, params=params, headers=headers, timeout=300)
+                    response.raise_for_status()
+                    data = response.json()
+                except requests.exceptions.RequestException as e:
+                    if cache_f:
+                        cache_f.close()
+                    raise CDXAPIError(f"CDX API取得エラー: {e}") from e
+                except json.JSONDecodeError as e:
+                    if cache_f:
+                        cache_f.close()
+                    raise CDXAPIError(f"JSONパースエラー: {e}") from e
+            
+                if not isinstance(data, list):
+                    if cache_f:
+                        cache_f.close()
+                    raise CDXAPIError(
+                        f"CDX APIが予期しない型のレスポンスを返しました: {type(data).__name__}. "
+                        f"リストが期待されます。"
+                    )
+
+                # 空リストをすべて除去（末尾だけでなく全体）
+                data = [row for row in data if row != []]
+
+                # ResumeKey検出（堅牢）
+                new_resume_key = None
+                if data and isinstance(data[-1], list) and len(data[-1]) == 1:
+                    # 単一要素の配列 → resumeKey候補
+                    candidate = data[-1][0]
+                    if isinstance(candidate, str):
+                        new_resume_key = candidate
+                        data = data[:-1]
+
+                # レスポンスで既に見たresumeKeyが再度返された場合は終了
+                # （同じレスポンス/ページを再び受け取っている）
+                if new_resume_key and new_resume_key in seen_response_keys:
+                    logger.warning(f"レスポンスで既に見たresumeKeyが再度返されました: {new_resume_key} -> 取得終了")
+                    break
+                
+                # new_resume_keyを記録（レスポンス由来）
+                if new_resume_key:
+                    seen_response_keys.add(new_resume_key)
+
+                # ヘッダー除去（毎チャンクで）
+                if data and isinstance(data[0], list) and data[0]:
+                    first_elem = data[0][0] if len(data[0]) > 0 else None
+                    if first_elem in ('urlkey', 'original'):
+                        data = data[1:]
+
+                # 有効なデータ行をキャッシュ追記 & yield（ストリーミング）
+                valid_count = 0
+                for row in data:
+                    if isinstance(row, list) and len(row) >= 2:  # 有効なデータ行のみ
+                        cache_f.write(json.dumps(row, ensure_ascii=False) + '\n')
+                        yield row  # メモリに貯めずに即座にyield
+                        total_yielded += 1
+                        valid_count += 1
+
+                # 無限ループ防止：有効なデータが0行の場合
+                if new_resume_key and valid_count == 0:
+                    logger.warning("有効なデータ行が0行でした")
+                    logger.info("次ページが存在しても無限ループ防止のため終了します")
+                    break
+
+                if new_resume_key:
+                    resume_key = new_resume_key
+                    logger.debug(f"次のチャンク: resumeKey={resume_key}")
+                else:
+                    logger.info(f"すべてのチャンクを取得完了 (合計 {total_yielded} レコード)")
+                    break
+        finally:
+            if cache_f:
+                cache_f.close()
+
+    # Generatorを返す（遅延評価）
+    return _fetch_from_api()
 
 
-def extract_archived_urls(cdx_data: List, ignore_protocol: bool,
+def extract_archived_urls(cdx_data: Iterable[List], ignore_protocol: bool,
                           sort_query: bool) -> Set[str]:
     """
     CDXデータから正規化されたURLの集合を抽出
@@ -218,9 +304,11 @@ def extract_archived_urls(cdx_data: List, ignore_protocol: bool,
     Returns:
         正規化されたURLの集合
     """
-    # cdx_dataがlistでない場合は早期return（test_non_list_cdx_response対応）
-    if not isinstance(cdx_data, list):
-        logger.warning(f"cdx_dataがlist型ではありません: {type(cdx_data).__name__}")
+    # cdx_dataがiterableでない場合は早期return
+    try:
+        iter(cdx_data)
+    except TypeError:
+        logger.warning(f"cdx_dataがiterable型ではありません: {type(cdx_data).__name__}")
         return set()
     
     archived_urls = set()
@@ -400,14 +488,16 @@ def main() -> int:
     
     try:
         cdx_data = fetch_cdx_data(args.target_url, args.cache_file)
+
+        logger.info("CDXデータの抽出が完了しました")
         
         archived_urls = extract_archived_urls(
             cdx_data,
             args.ignore_protocol,
             args.sort_query
         )
-        cdx_raw_count = max(0, len(cdx_data) - 1)
-        logger.info(f"CDX取得件数: {cdx_raw_count}")
+        
+        logger.info(f"CDX取得件数:: {len(archived_urls)}")
         
         not_archived, archived, total_count = detect_not_archived(
             args.input_file,

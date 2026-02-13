@@ -422,10 +422,15 @@ class TestAdditionalFeatures(unittest.TestCase):
             cache_path = f.name
         
         try:
-            data = fetch_cdx_data("x", cache_path)
+            data_gen = fetch_cdx_data("x", cache_path)
             
-            # 返り値がlistであることを確認
-            self.assertIsInstance(data, list)
+            # Generatorであることを確認
+            self.assertTrue(hasattr(data_gen, '__iter__'))
+            self.assertTrue(hasattr(data_gen, '__next__'))
+            
+            # データをlistに変換
+            data = list(data_gen)
+
             # 各要素もlistであることを確認
             self.assertTrue(all(isinstance(row, list) for row in data))
             # 2行読み込まれたことを確認
@@ -450,10 +455,18 @@ class TestAdditionalFeatures(unittest.TestCase):
         mock_session.get.return_value = mock_response
         
         try:
-            data = fetch_cdx_data("ok", cache_path)
+            data_gen = fetch_cdx_data("ok", cache_path)
+
+            try:
+                first_item = next(data_gen)
+            except StopIteration:
+                pass  # データが空の場合
             
             # APIが呼ばれたことを確認 (getメソッドが呼ばれたか)
             mock_session.get.assert_called()
+
+            # 残りのデータも取得
+            data = [first_item] + list(data_gen) if 'first_item' in locals() else []
             
             # 結果がlistであることを確認
             self.assertIsInstance(data, list)
@@ -486,6 +499,117 @@ class TestAdditionalFeatures(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertTrue(any("valid.example" in u for u in res))
 
+class TestCDXPagination(unittest.TestCase):
+    """CDX Pagination with ResumeKeyのテスト"""
+
+    @patch('requests.Session')
+    def test_resumekey_pagination(self, mock_session_cls):
+        """resumeKeyによるページネーションが正しく動作することを確認"""
+        
+        # 1回目のレスポンス（resumeKeyあり）
+        first_response = MagicMock()
+        first_response.json.return_value = [
+            ["original", "timestamp"],
+            ["http://page1.example/", "20200101"],
+            ["http://page2.example/", "20200102"],
+            ["RESUME_KEY_123"]  # resumeKey
+        ]
+        first_response.raise_for_status.return_value = None
+        
+        # 2回目のレスポンス（resumeKeyなし、最終ページ）
+        second_response = MagicMock()
+        second_response.json.return_value = [
+            ["original", "timestamp"],
+            ["http://page3.example/", "20200103"],
+            ["http://page4.example/", "20200104"]
+        ]
+        second_response.raise_for_status.return_value = None
+        
+        # モックセッションの設定
+        mock_session = mock_session_cls.return_value
+        mock_session.get.side_effect = [first_response, second_response]
+        
+        # 一時キャッシュファイル
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
+            cache_path = f.name
+        
+        try:
+            # fetch_cdx_dataを実行
+            data_gen = fetch_cdx_data("http://example.com/*", cache_path)
+            data = list(data_gen)
+            
+            # 2回APIが呼ばれたことを確認
+            self.assertEqual(mock_session.get.call_count, 2)
+            
+            # 2回目の呼び出しでresumeKeyが渡されたことを確認
+            second_call_kwargs = mock_session.get.call_args_list[1][1]
+            self.assertIn('params', second_call_kwargs)
+            self.assertIn('resumeKey', second_call_kwargs['params'])
+            self.assertEqual(second_call_kwargs['params']['resumeKey'], 'RESUME_KEY_123')
+            
+            # 合計4レコードが取得されたことを確認（ヘッダーとresumeKeyは除外される）
+            self.assertEqual(len(data), 4)
+            
+            # キャッシュファイルに4行書き込まれたことを確認
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                cache_lines = [line.strip() for line in f if line.strip()]
+            self.assertEqual(len(cache_lines), 4)
+            
+        finally:
+            if os.path.exists(cache_path):
+                os.unlink(cache_path)
+
+    @patch('requests.Session')
+    def test_empty_list_handling(self, mock_session_cls):
+        """空リストが末尾にある場合の処理を確認"""
+        
+        mock_response = MagicMock()
+        mock_response.json.return_value = [
+            ["original", "timestamp"],
+            ["http://page1.example/", "20200101"],
+            [],  # 空リスト
+            ["RESUME_KEY_456"]
+        ]
+        mock_response.raise_for_status.return_value = None
+        
+        mock_session = mock_session_cls.return_value
+        mock_session.get.return_value = mock_response
+        
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
+            cache_path = f.name
+        
+        try:
+            data_gen = fetch_cdx_data("http://example.com/*", cache_path)
+            data = list(data_gen)
+            
+            # 空リストは除外され、1レコードのみ
+            self.assertEqual(len(data), 1)
+            
+        finally:
+            if os.path.exists(cache_path):
+                os.unlink(cache_path)
+
+    def test_generator_is_consumed_once(self):
+        """Generatorは一度しか消費できないことを確認"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
+            f.write('["http://a/","20200101"]\n["http://b/","20200102"]\n')
+            cache_path = f.name
+        
+        try:
+            data_gen = fetch_cdx_data("test", cache_path)
+            
+            # 1回目の消費
+            data1 = list(data_gen)
+            self.assertEqual(len(data1), 2)
+            
+            # 2回目の消費（空になる）
+            data2 = list(data_gen)
+            self.assertEqual(len(data2), 0)
+            
+        finally:
+            if os.path.exists(cache_path):
+                os.unlink(cache_path)
+
 
 def run_tests():
     """テストを実行"""
@@ -500,6 +624,7 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestDetectNotArchived))
     suite.addTests(loader.loadTestsFromTestCase(TestIntegration))
     suite.addTests(loader.loadTestsFromTestCase(TestAdditionalFeatures))
+    suite.addTests(loader.loadTestsFromTestCase(TestCDXPagination))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
