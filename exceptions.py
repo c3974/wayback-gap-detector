@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Wayback Gap Detector - Custom Exceptions
-ライブラリ層で使用するカスタム例外クラス
+Custom exception classes used by the library layer.
 """
 
 

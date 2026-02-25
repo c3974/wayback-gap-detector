@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Wayback Gap Detector - 単体テスト
-wbgap.pyの各機能をテストする
+Wayback Gap Detector - Unit Tests
+Tests for each feature of wbgap.py.
 """
 
 import unittest
@@ -20,22 +20,22 @@ from unittest.mock import patch, MagicMock
 
 
 class TestNormalizeUrl(unittest.TestCase):
-    """URL正規化関数のテスト"""
+    """Tests for the URL normalization function."""
     
     def test_basic_normalization(self):
-        """基本的な正規化のテスト"""
+        """Test basic normalization (whitespace trimming, protocol lowercasing)."""
         url = "  https://Example.com/Path  "
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertEqual(result, "http://example.com/Path")
     
     def test_html_unescape(self):
-        """HTML実体参照のデコードテスト"""
+        """Test that HTML entities are decoded."""
         url = "https://example.com/page?name=John&amp;Doe"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertIn("John&Doe", result)
     
     def test_protocol_ignore_true(self):
-        """プロトコル無視機能のテスト（有効）"""
+        """Test that http and https are treated as equivalent when ignore_protocol=True."""
         url1 = "http://example.com/page"
         url2 = "https://example.com/page"
         result1 = normalize_url(url1, ignore_protocol=True, sort_query=False)
@@ -44,7 +44,7 @@ class TestNormalizeUrl(unittest.TestCase):
         self.assertTrue(result1.startswith("http://"))
     
     def test_protocol_ignore_false(self):
-        """プロトコル無視機能のテスト（無効）"""
+        """Test that http and https are kept distinct when ignore_protocol=False."""
         url1 = "http://example.com/page"
         url2 = "https://example.com/page"
         result1 = normalize_url(url1, ignore_protocol=False, sort_query=False)
@@ -54,13 +54,13 @@ class TestNormalizeUrl(unittest.TestCase):
         self.assertTrue(result2.startswith("https://"))
     
     def test_hostname_lowercase(self):
-        """ホスト名の小文字化テスト"""
+        """Test that hostnames are lowercased."""
         url = "https://EXAMPLE.COM/Path"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertIn("example.com", result)
     
     def test_default_port_removal(self):
-        """デフォルトポート削除のテスト"""
+        """Test that default ports (80 for http, 443 for https) are stripped."""
         url1 = "http://example.com:80/page"
         url2 = "https://example.com:443/page"
         result1 = normalize_url(url1, ignore_protocol=False, sort_query=False)
@@ -69,79 +69,79 @@ class TestNormalizeUrl(unittest.TestCase):
         self.assertNotIn(":443", result2)
     
     def test_non_default_port_preservation(self):
-        """非デフォルトポート保持のテスト"""
+        """Test that non-default ports are preserved."""
         url = "http://example.com:8080/page"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertIn(":8080", result)
     
     def test_trailing_slash_removal(self):
-        """末尾スラッシュ削除のテスト"""
+        """Test that trailing slashes are removed from non-root paths."""
         url = "https://example.com/path/"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertEqual(result, "http://example.com/path")
     
     def test_root_path_preserved(self):
-        """ルートパスの保持テスト"""
+        """Test that the root path '/' is preserved as-is."""
         url = "https://example.com/"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertEqual(result, "http://example.com/")
     
     def test_query_sort_enabled(self):
-        """クエリパラメータソート有効のテスト"""
+        """Test that query parameters are sorted alphabetically when sort_query=True."""
         url = "https://example.com/page?z=3&a=1&m=2"
         result = normalize_url(url, ignore_protocol=True, sort_query=True)
-        # ソート後はa, m, zの順になる
+        # After sorting the order should be: a, m, z
         self.assertIn("a=1", result)
         self.assertIn("m=2", result)
         self.assertIn("z=3", result)
-        # a が z より前に来ることを確認
+        # Verify that 'a' appears before 'z'
         self.assertLess(result.index("a=1"), result.index("z=3"))
     
     def test_query_sort_disabled(self):
-        """クエリパラメータソート無効のテスト"""
+        """Test that the original query parameter order is preserved when sort_query=False."""
         url = "https://example.com/page?z=3&a=1&m=2"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
-        # 元の順序を維持
+        # Original order should be preserved
         self.assertIn("z=3", result)
         self.assertIn("a=1", result)
     
     def test_empty_query_removal(self):
-        """空クエリの削除テスト"""
+        """Test that an empty query string ('?') is removed."""
         url = "https://example.com/page?"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertNotIn("?", result)
     
     def test_fragment_removal(self):
-        """フラグメント削除のテスト"""
+        """Test that URL fragments are always stripped."""
         url = "https://example.com/page#section"
         result = normalize_url(url, ignore_protocol=True, sort_query=False)
         self.assertNotIn("#", result)
         self.assertEqual(result, "http://example.com/page")
     
     def test_complex_url(self):
-        """複雑なURLの正規化テスト"""
+        """Test normalization of a complex URL with all features combined."""
         url = "  HTTPS://Example.COM:443/Path/?b=2&a=1#fragment  "
         result = normalize_url(url, ignore_protocol=True, sort_query=True)
-        # プロトコル統一、小文字化、ポート削除、クエリソート、フラグメント削除
+        # Protocol unified, hostname lowercased, port removed, query sorted, fragment removed
         expected = "http://example.com/Path?a=1&b=2"
         self.assertEqual(result, expected)
     
     def test_path_trailing_slash_equivalence(self):
-        """パス末尾スラッシュの同一性テスト"""
+        """Test that URLs with and without a trailing slash normalize to the same value."""
         url1 = "https://example.com/path"
         url2 = "https://example.com/path/"
         result1 = normalize_url(url1, ignore_protocol=True, sort_query=False)
         result2 = normalize_url(url2, ignore_protocol=True, sort_query=False)
-        # 末尾スラッシュが削除されて同一にURLになる
+        # The trailing slash should be removed so the two URLs are identical
         self.assertEqual(result1, result2)
         self.assertEqual(result1, "http://example.com/path")
 
 
 class TestExtractArchivedUrls(unittest.TestCase):
-    """アーカイブ済みURL抽出機能のテスト"""
+    """Tests for the archived-URL extraction function."""
     
     def test_basic_extraction(self):
-        """基本的な抽出テスト"""
+        """Test basic extraction of URLs from CDX data."""
         cdx_data = [
             ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"],
             ["com,example)/page1", "20230101000000", "https://example.com/page1", "text/html", "200", "ABC123", "1234"],
@@ -153,12 +153,12 @@ class TestExtractArchivedUrls(unittest.TestCase):
         self.assertIn(normalize_url("https://example.com/page2", True, False), result)
     
     def test_empty_data(self):
-        """空データのテスト"""
+        """Test that an empty input returns an empty set."""
         result = extract_archived_urls([], ignore_protocol=True, sort_query=False)
         self.assertEqual(len(result), 0)
     
     def test_header_only(self):
-        """ヘッダーのみのテスト"""
+        """Test that a header-only CDX response returns an empty set."""
         cdx_data = [
             ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]
         ]
@@ -167,16 +167,16 @@ class TestExtractArchivedUrls(unittest.TestCase):
 
 
 class TestCDXRobustness(unittest.TestCase):
-    """空や異常なCDXレスポンスのテスト"""
+    """Tests for handling empty or malformed CDX responses."""
     
     def test_empty_cdx_list(self):
-        """空CDXリスト（[]）の処理"""
+        """Test that an empty CDX list ([]) is handled gracefully."""
         result = extract_archived_urls([], ignore_protocol=True, sort_query=False)
         self.assertEqual(len(result), 0)
         self.assertIsInstance(result, set)
     
     def test_header_only_cdx(self):
-        """ヘッダーのみのCDXデータ"""
+        """Test that CDX data with a header row but no data rows returns an empty set."""
         cdx_data = [
             ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]
         ]
@@ -184,7 +184,7 @@ class TestCDXRobustness(unittest.TestCase):
         self.assertEqual(len(result), 0)
     
     def test_non_list_cdx_response(self):
-        """非リスト型のCDXレスポンス（dict, str, None）"""
+        """Test that non-list CDX responses (dict, None) return an empty set."""
         # dict
         result = extract_archived_urls({"error": "test"}, ignore_protocol=True, sort_query=False)
         self.assertEqual(len(result), 0)
@@ -194,32 +194,32 @@ class TestCDXRobustness(unittest.TestCase):
         self.assertEqual(len(result), 0)
     
     def test_invalid_header_row(self):
-        """ヘッダー行が文字列などの異常ケース"""
+        """Test that a malformed (non-list) header row results in an empty set."""
         cdx_data = [
-            "invalid_header",  # 文字列
+            "invalid_header",  # string instead of list
             ["com,example)/page1", "20230101000000", "https://example.com/page1"]
         ]
         result = extract_archived_urls(cdx_data, ignore_protocol=True, sort_query=False)
-        self.assertEqual(len(result), 0)  # ヘッダーが無効なので空セット
+        self.assertEqual(len(result), 0)  # Invalid header → empty set
     
     def test_invalid_data_rows(self):
-        """データ行に文字列が混入している場合"""
+        """Test that string rows mixed into data are skipped gracefully."""
         cdx_data = [
             ["urlkey", "timestamp", "original"],
             ["com,example)/page1", "20230101000000", "https://example.com/page1"],
-            "invalid row",  # 異常行
+            "invalid row",  # malformed row
             ["com,example)/page2", "20230102000000", "https://example.com/page2"],
         ]
         result = extract_archived_urls(cdx_data, ignore_protocol=True, sort_query=False)
-        # 無効な行はスキップされ、2件の有効なURLが抽出される
+        # Invalid rows are skipped; 2 valid URLs should be extracted
         self.assertEqual(len(result), 2)
 
 
 class TestExceptions(unittest.TestCase):
-    """例外処理のテスト"""
+    """Tests for exception handling."""
     
     def test_input_file_not_found(self):
-        """入力ファイルが存在しない場合にInputFileErrorが発生"""
+        """Test that InputFileError is raised when the input file does not exist."""
         with self.assertRaises(InputFileError) as cm:
             detect_not_archived(
                 "nonexistent_file.txt",
@@ -228,14 +228,14 @@ class TestExceptions(unittest.TestCase):
                 sort_query=False,
                 collect_archived=False
             )
-        self.assertIn("入力ファイルが見つかりません", str(cm.exception))
+        self.assertIn("Input file not found", str(cm.exception))
 
 
 class TestDetectNotArchived(unittest.TestCase):
-    """未アーカイブURL検出機能のテスト"""
+    """Tests for the unarchived-URL detection function."""
     
     def setUp(self):
-        """テスト用の一時ファイルを作成"""
+        """Create a temporary input file for each test."""
         self.temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8')
         self.temp_file.write("https://example.com/page1\n")
         self.temp_file.write("https://example.com/page2\n")
@@ -243,11 +243,11 @@ class TestDetectNotArchived(unittest.TestCase):
         self.temp_file.close()
     
     def tearDown(self):
-        """一時ファイルを削除"""
+        """Remove the temporary input file after each test."""
         os.unlink(self.temp_file.name)
     
     def test_all_archived(self):
-        """すべてアーカイブ済みの場合"""
+        """Test that no unarchived URLs are reported when all inputs are archived."""
         archived_urls = {
             normalize_url("https://example.com/page1", True, False),
             normalize_url("https://example.com/page2", True, False),
@@ -263,7 +263,7 @@ class TestDetectNotArchived(unittest.TestCase):
         self.assertEqual(len(result), 0)
     
     def test_some_not_archived(self):
-        """一部が未アーカイブの場合"""
+        """Test that only unarchived URLs are returned when some are missing."""
         archived_urls = {
             normalize_url("https://example.com/page1", True, False),
         }
@@ -279,7 +279,7 @@ class TestDetectNotArchived(unittest.TestCase):
         self.assertIn("https://example.com/page3", result)
     
     def test_all_not_archived(self):
-        """すべて未アーカイブの場合"""
+        """Test that all URLs are reported when none have been archived."""
         archived_urls = set()
         result, _, _ = detect_not_archived(
             self.temp_file.name,
@@ -291,23 +291,23 @@ class TestDetectNotArchived(unittest.TestCase):
         self.assertEqual(len(result), 3)
     
     def test_protocol_independence(self):
-        """プロトコル無視での検出テスト"""
+        """Test that http-archived URLs are matched against https inputs when ignore_protocol=True."""
         archived_urls = {
-            normalize_url("http://example.com/page1", True, False),  # httpでアーカイブ
+            normalize_url("http://example.com/page1", True, False),  # archived via http
         }
         result, _, _ = detect_not_archived(
             self.temp_file.name,
             archived_urls,
-            ignore_protocol=True,  # プロトコル無視有効
+            ignore_protocol=True,  # ignore_protocol enabled
             sort_query=False,
             collect_archived=False
         )
-        # https://example.com/page1 もアーカイブ済みとみなされる
+        # https://example.com/page1 should also be considered archived
         self.assertEqual(len(result), 2)
         self.assertNotIn("https://example.com/page1", result)
 
     def test_collect_archived_enabled(self):
-        """アーカイブ済みURL収集機能のテスト"""
+        """Test that archived URLs are returned separately when collect_archived=True."""
         archived_urls = {
             normalize_url("https://example.com/page1", True, False),
         }
@@ -316,19 +316,19 @@ class TestDetectNotArchived(unittest.TestCase):
             archived_urls,
             ignore_protocol=True,
             sort_query=False,
-            collect_archived=True  # アーカイブ済みも収集
+            collect_archived=True  # also collect archived URLs
         )
         
-        # 合計3件の入力URL
+        # 3 input URLs in total
         self.assertEqual(total_count, 3)
-        # 1件がアーカイブ済み
+        # 1 URL is archived
         self.assertEqual(len(archived), 1)
         self.assertIn("https://example.com/page1", archived)
-        # 2件が未アーカイブ
+        # 2 URLs are unarchived
         self.assertEqual(len(not_archived), 2)
 
     def test_collect_archived_disabled(self):
-        """アーカイブ済みURL収集なしのテスト"""
+        """Test that archived is None when collect_archived=False."""
         archived_urls = {
             normalize_url("https://example.com/page1", True, False),
         }
@@ -337,32 +337,32 @@ class TestDetectNotArchived(unittest.TestCase):
             archived_urls,
             ignore_protocol=True,
             sort_query=False,
-            collect_archived=False  # 収集しない
+            collect_archived=False  # do not collect archived URLs
         )
         
-        # archivedはNone
+        # archived should be None
         self.assertIsNone(archived)
-        # total_countとnot_archivedは正しい
+        # total_count and not_archived should be correct
         self.assertEqual(total_count, 3)
         self.assertEqual(len(not_archived), 2)
 
 
 class TestIntegration(unittest.TestCase):
-    """統合テスト"""
+    """Integration tests."""
     
     def test_end_to_end_workflow(self):
-        """エンドツーエンドのワークフローテスト"""
-        # CDXデータの準備
+        """End-to-end workflow test: extract archived URLs then detect unarchived ones."""
+        # Prepare CDX data
         cdx_data = [
             ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"],
             ["com,example)/path1", "20230101000000", "https://example.com/path1", "text/html", "200", "ABC", "100"],
             ["com,example)/path2", "20230102000000", "http://example.com/path2", "text/html", "200", "DEF", "200"],
         ]
         
-        # アーカイブ済みURL抽出
+        # Extract archived URLs
         archived = extract_archived_urls(cdx_data, ignore_protocol=True, sort_query=False)
         
-        # 入力ファイル作成
+        # Create a temporary input file
         with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
             f.write("https://example.com/path1\n")
             f.write("https://example.com/path2\n")
@@ -370,7 +370,7 @@ class TestIntegration(unittest.TestCase):
             temp_input = f.name
         
         try:
-            # 未アーカイブ検出
+            # Detect unarchived URLs
             not_archived, _, _ = detect_not_archived(
                 temp_input,
                 archived,
@@ -379,7 +379,7 @@ class TestIntegration(unittest.TestCase):
                 collect_archived=False
             )
             
-            # 検証
+            # Verify results
             self.assertEqual(len(not_archived), 1)
             self.assertEqual(not_archived[0], "https://example.com/path3")
         
@@ -387,28 +387,28 @@ class TestIntegration(unittest.TestCase):
             os.unlink(temp_input)
 
 class TestAdditionalFeatures(unittest.TestCase):
-    """追加テスト - wbgap.pyの修正に対応するテスト関数（unittest版）"""
+    """Additional tests covering edge cases introduced in recent revisions."""
 
     def test_non_list_cdx_response_none(self):
-        """cdx_dataがNoneの場合、空setを返す"""
+        """When cdx_data is None, extract_archived_urls should return an empty set."""
         self.assertEqual(extract_archived_urls(None, ignore_protocol=True, sort_query=False), set())
 
     def test_non_list_cdx_response_dict(self):
-        """cdx_dataがdictの場合、空setを返す"""
+        """When cdx_data is a dict, extract_archived_urls should return an empty set."""
         self.assertEqual(extract_archived_urls({"foo": "bar"}, ignore_protocol=True, sort_query=False), set())
 
     def test_non_list_cdx_response_string(self):
-        """cdx_dataが文字列の場合、空setを返す"""
+        """When cdx_data is a string, extract_archived_urls should return an empty set."""
         self.assertEqual(extract_archived_urls("invalid", ignore_protocol=True, sort_query=False), set())
 
     def test_extract_with_mixed_row_types(self):
-        """CDXデータに異なる型の行が混在する場合、list行のみ処理する"""
+        """When CDX data contains rows of mixed types, only list rows should be processed."""
         cdx = [
-            ["original", "timestamp"],  # ヘッダー
-            {"bad": "row"},  # 異常行（dict）
-            ["http://a.example/", "20200101"],  # 正常行
-            "invalid_string",  # 異常行（str）
-            ["https://b/", "20200202"]  # 正常行
+            ["original", "timestamp"],  # header
+            {"bad": "row"},  # malformed row (dict)
+            ["http://a.example/", "20200101"],  # valid row
+            "invalid_string",  # malformed row (str)
+            ["https://b/", "20200202"]  # valid row
         ]
         res = extract_archived_urls(cdx, ignore_protocol=True, sort_query=False)
         self.assertTrue(any("a.example" in u for u in res))
@@ -416,7 +416,7 @@ class TestAdditionalFeatures(unittest.TestCase):
         self.assertEqual(len(res), 2)
 
     def test_fetch_cdx_reads_jsonl(self):
-        """キャッシュファイル（JSONL形式）を正しく読み込み、listを返す"""
+        """Test that fetch_cdx_data reads a JSONL cache file and returns a generator."""
         with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
             f.write('["original","timestamp"]\n["http://x/","20200101"]\n')
             cache_path = f.name
@@ -424,16 +424,16 @@ class TestAdditionalFeatures(unittest.TestCase):
         try:
             data_gen = fetch_cdx_data("x", cache_path)
             
-            # Generatorであることを確認
+            # Verify it is a generator
             self.assertTrue(hasattr(data_gen, '__iter__'))
             self.assertTrue(hasattr(data_gen, '__next__'))
             
-            # データをlistに変換
+            # Consume the generator into a list
             data = list(data_gen)
 
-            # 各要素もlistであることを確認
+            # Verify each element is also a list
             self.assertTrue(all(isinstance(row, list) for row in data))
-            # 2行読み込まれたことを確認
+            # Verify 2 rows were read
             self.assertEqual(len(data), 2)
         finally:
             if os.path.exists(cache_path):
@@ -441,12 +441,12 @@ class TestAdditionalFeatures(unittest.TestCase):
 
     @patch('requests.Session')
     def test_fetch_cdx_cache_corrupt_fallback(self, mock_session_cls):
-        """キャッシュが壊れている場合、fetch_cdx_dataはAPI呼び出しにフォールバックする"""
+        """When the cache is corrupt, fetch_cdx_data should fall back to the CDX API."""
         with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
             f.write('NOT-JSON\n')
             cache_path = f.name
             
-        # APIモックの設定
+        # Configure the API mock
         mock_response = MagicMock()
         mock_response.json.return_value = [["original", "timestamp"], ["http://ok/", "20200101"]]
         mock_response.raise_for_status.return_value = None
@@ -460,17 +460,17 @@ class TestAdditionalFeatures(unittest.TestCase):
             try:
                 first_item = next(data_gen)
             except StopIteration:
-                pass  # データが空の場合
+                pass  # No data returned
             
-            # APIが呼ばれたことを確認 (getメソッドが呼ばれたか)
+            # Verify the API was called
             mock_session.get.assert_called()
 
-            # 残りのデータも取得
+            # Consume the remaining data
             data = [first_item] + list(data_gen) if 'first_item' in locals() else []
             
-            # 結果がlistであることを確認
+            # Verify the result is a list
             self.assertIsInstance(data, list)
-            # データが返されたことを確認
+            # Verify that data was returned
             self.assertTrue(any("ok/" in str(row) for row in data))
             
         finally:
@@ -478,35 +478,35 @@ class TestAdditionalFeatures(unittest.TestCase):
                 os.unlink(cache_path)
 
     def test_extract_no_original_column_uses_index_0(self):
-        """'original'カラムがない場合、index 0を使用する"""
+        """When no 'original' column exists, index 0 should be used as a fallback."""
         cdx = [
-            ["url", "timestamp"],  # originalではなくurlというヘッダー
+            ["url", "timestamp"],  # header with 'url' instead of 'original'
             ["http://test.example/", "20200101"]
         ]
         res = extract_archived_urls(cdx, ignore_protocol=True, sort_query=False)
-        # index 0が使われるので"http://test.example/"が抽出される
+        # index 0 should be used, so "http://test.example/" is extracted
         self.assertTrue(any("test.example" in u for u in res))
 
     def test_extract_empty_rows_skipped(self):
-        """空行が含まれる場合でも正常に処理される"""
+        """Test that empty rows in CDX data are skipped without error."""
         cdx = [
             ["original", "timestamp"],
-            [],  # 空行
+            [],  # empty row
             ["http://valid.example/", "20200101"],
-            [],  # 空行
+            [],  # empty row
         ]
         res = extract_archived_urls(cdx, ignore_protocol=True, sort_query=False)
         self.assertEqual(len(res), 1)
         self.assertTrue(any("valid.example" in u for u in res))
 
 class TestCDXPagination(unittest.TestCase):
-    """CDX Pagination with ResumeKeyのテスト"""
+    """Tests for CDX pagination via resumeKey."""
 
     @patch('requests.Session')
     def test_resumekey_pagination(self, mock_session_cls):
-        """resumeKeyによるページネーションが正しく動作することを確認"""
+        """Test that resumeKey pagination fetches all pages correctly."""
         
-        # 1回目のレスポンス（resumeKeyあり）
+        # First response (contains a resumeKey)
         first_response = MagicMock()
         first_response.json.return_value = [
             ["original", "timestamp"],
@@ -516,7 +516,7 @@ class TestCDXPagination(unittest.TestCase):
         ]
         first_response.raise_for_status.return_value = None
         
-        # 2回目のレスポンス（resumeKeyなし、最終ページ）
+        # Second response (no resumeKey — last page)
         second_response = MagicMock()
         second_response.json.return_value = [
             ["original", "timestamp"],
@@ -525,32 +525,32 @@ class TestCDXPagination(unittest.TestCase):
         ]
         second_response.raise_for_status.return_value = None
         
-        # モックセッションの設定
+        # Configure the mock session
         mock_session = mock_session_cls.return_value
         mock_session.get.side_effect = [first_response, second_response]
         
-        # 一時キャッシュファイル
+        # Temporary cache file
         with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
             cache_path = f.name
         
         try:
-            # fetch_cdx_dataを実行
+            # Run fetch_cdx_data
             data_gen = fetch_cdx_data("http://example.com/*", cache_path)
             data = list(data_gen)
             
-            # 2回APIが呼ばれたことを確認
+            # Verify the API was called twice
             self.assertEqual(mock_session.get.call_count, 2)
             
-            # 2回目の呼び出しでresumeKeyが渡されたことを確認
+            # Verify the resumeKey was passed in the second call
             second_call_kwargs = mock_session.get.call_args_list[1][1]
             self.assertIn('params', second_call_kwargs)
             self.assertIn('resumeKey', second_call_kwargs['params'])
             self.assertEqual(second_call_kwargs['params']['resumeKey'], 'RESUME_KEY_123')
             
-            # 合計4レコードが取得されたことを確認（ヘッダーとresumeKeyは除外される）
+            # Verify 4 records were fetched (header and resumeKey rows excluded)
             self.assertEqual(len(data), 4)
             
-            # キャッシュファイルに4行書き込まれたことを確認
+            # Verify 4 lines were written to the cache file
             with open(cache_path, 'r', encoding='utf-8') as f:
                 cache_lines = [line.strip() for line in f if line.strip()]
             self.assertEqual(len(cache_lines), 4)
@@ -561,13 +561,13 @@ class TestCDXPagination(unittest.TestCase):
 
     @patch('requests.Session')
     def test_empty_list_handling(self, mock_session_cls):
-        """空リストが末尾にある場合の処理を確認"""
+        """Test that empty lists embedded in the response are removed before processing."""
         
         mock_response = MagicMock()
         mock_response.json.return_value = [
             ["original", "timestamp"],
             ["http://page1.example/", "20200101"],
-            [],  # 空リスト
+            [],  # empty list
             ["RESUME_KEY_456"]
         ]
         mock_response.raise_for_status.return_value = None
@@ -582,7 +582,7 @@ class TestCDXPagination(unittest.TestCase):
             data_gen = fetch_cdx_data("http://example.com/*", cache_path)
             data = list(data_gen)
             
-            # 空リストは除外され、1レコードのみ
+            # Empty lists removed; only 1 record remains
             self.assertEqual(len(data), 1)
             
         finally:
@@ -590,7 +590,7 @@ class TestCDXPagination(unittest.TestCase):
                 os.unlink(cache_path)
 
     def test_generator_is_consumed_once(self):
-        """Generatorは一度しか消費できないことを確認"""
+        """Test that a generator can only be consumed once (standard generator behaviour)."""
         with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as f:
             f.write('["http://a/","20200101"]\n["http://b/","20200102"]\n')
             cache_path = f.name
@@ -598,11 +598,11 @@ class TestCDXPagination(unittest.TestCase):
         try:
             data_gen = fetch_cdx_data("test", cache_path)
             
-            # 1回目の消費
+            # First consumption
             data1 = list(data_gen)
             self.assertEqual(len(data1), 2)
             
-            # 2回目の消費（空になる）
+            # Second consumption should be empty
             data2 = list(data_gen)
             self.assertEqual(len(data2), 0)
             
@@ -612,11 +612,11 @@ class TestCDXPagination(unittest.TestCase):
 
 
 def run_tests():
-    """テストを実行"""
+    """Discover and run all test cases."""
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     
-    # すべてのテストクラスを追加
+    # Add all test classes
     suite.addTests(loader.loadTestsFromTestCase(TestNormalizeUrl))
     suite.addTests(loader.loadTestsFromTestCase(TestExtractArchivedUrls))
     suite.addTests(loader.loadTestsFromTestCase(TestCDXRobustness))
@@ -635,15 +635,15 @@ def run_tests():
 if __name__ == '__main__':
     result = run_tests()
     
-    # テスト結果のサマリー
+    # Test result summary
     print("\n" + "="*70)
-    print("テスト結果サマリー")
+    print("Test Result Summary")
     print("="*70)
-    print(f"実行テスト数: {result.testsRun}")
-    print(f"成功: {result.testsRun - len(result.failures) - len(result.errors)}")
-    print(f"失敗: {len(result.failures)}")
-    print(f"エラー: {len(result.errors)}")
+    print(f"Tests run:  {result.testsRun}")
+    print(f"Passed:     {result.testsRun - len(result.failures) - len(result.errors)}")
+    print(f"Failed:     {len(result.failures)}")
+    print(f"Errors:     {len(result.errors)}")
     print("="*70)
     
-    # 終了コード
+    # Exit code
     exit(0 if result.wasSuccessful() else 1)

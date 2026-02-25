@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 Wayback Gap Detector
-ローカルのURLリストとWayback Machine CDX APIデータを突き合わせ、
-アーカイブされていないURLを検出するツール
+Compares a local URL list against the Wayback Machine CDX API
+to identify URLs that have not been archived.
 """
 
 import argparse
@@ -22,12 +22,12 @@ from urllib3.util import Retry
 
 from exceptions import CDXAPIError, InputFileError
 
-# ロガー設定
+# Logger setup
 logger = logging.getLogger(__name__)
 
 
 # ========================================
-# デフォルト設定
+# Default settings
 # ========================================
 IGNORE_PROTOCOL = True
 SORT_QUERY_PARAMS = False
@@ -41,48 +41,48 @@ USER_AGENT = "Wayback-Gap-Detector/1.0 (https://github.com/c3974/wayback-gap-det
 CDX_LIMIT = 25000
 
 # ========================================
-# URL正規化関数
+# URL normalization
 # ========================================
 def normalize_url(url: str, ignore_protocol: bool = IGNORE_PROTOCOL,
                   sort_query: bool = SORT_QUERY_PARAMS) -> str:
     """
-    URLを正規化して比較可能な形式に変換する
+    Normalize a URL into a canonical form suitable for comparison.
     
     Args:
-        url: 正規化対象のURL
-        ignore_protocol: プロトコル（http/https）を無視するか
-        sort_query: クエリパラメータをソートするか
+        url: The URL to normalize.
+        ignore_protocol: If True, treat http and https as equivalent.
+        sort_query: If True, sort query parameters alphabetically.
     
     Returns:
-        正規化されたURL文字列
+        The normalized URL string.
     """
-    # 1. 前後の空白削除
+    # 1. Strip leading/trailing whitespace
     url = url.strip()
     
-    # 2. HTML実体参照のデコード
+    # 2. Decode HTML entities
     url = html.unescape(url)
     
-    # 3. スキームが無い場合は http:// を補完
+    # 3. Prepend http:// if no scheme is present
     if '://' not in url:
         url = 'http://' + url
     
-    # 4. URLをパース
+    # 4. Parse the URL
     parsed = urlparse(url)
     
-    # 5. スキームの正規化
+    # 5. Normalize the scheme
     original_scheme = parsed.scheme.lower()
     scheme = original_scheme
     if ignore_protocol and scheme in ('http', 'https'):
         scheme = 'http'
     
-    # 5. ホスト名の正規化（小文字化）
+    # 6. Normalize the hostname to lowercase
     netloc = parsed.hostname or ''
     netloc = netloc.lower()
     
-    # 6. ポート番号の処理
+    # 7. Handle port numbers
     port = parsed.port
     if port:
-        # デフォルトポートは削除（元のスキームと正規化後のスキームの両方をチェック）
+        # Remove default ports (checked against both original and normalized scheme)
         is_default_port = (
             (original_scheme == 'http' and port == 80) or
             (original_scheme == 'https' and port == 443) or
@@ -92,62 +92,66 @@ def normalize_url(url: str, ignore_protocol: bool = IGNORE_PROTOCOL,
         if not is_default_port:
             netloc = f"{netloc}:{port}"
     
-    # 7. パスの正規化
+    # 8. Normalize the path
     path = parsed.path
-    # 末尾のスラッシュを削除（ルートパス "/" は除く）
+    # Remove trailing slash, except for the root path "/"
     if path and path != '/' and path.endswith('/'):
         path = path.rstrip('/')
     
-    # 8. クエリパラメータの処理
+    # 9. Handle query parameters
     query = parsed.query
     if query:
         if sort_query:
-            # クエリパラメータをソート
+            # Sort query parameters alphabetically
             params = parse_qs(query, keep_blank_values=True)
             sorted_params = sorted(params.items())
             query = urlencode(sorted_params, doseq=True)
-        # else: 元の順序を維持
     else:
         query = ''
     
-    # 9. フラグメントは削除（常に空文字列）
+    # 10. Always strip the fragment
     fragment = ''
     
-    # 10. 正規化されたURLを再構築
+    # 11. Reconstruct the normalized URL
     normalized = urlunparse((scheme, netloc, path, '', query, fragment))
     
     return normalized
 
 
 # ========================================
-# CDX API関連
+# CDX API
 # ========================================
-def fetch_cdx_data(target_url: str, cache_file: str) -> Generator[List, None, None]:
+def fetch_cdx_data(target_url: str, cache_file: str,
+                   initial_resume_key: Optional[str] = None,
+                   limit: int = CDX_LIMIT) -> Generator[List, None, None]:
     """
-    CDX APIからデータを取得、またはキャッシュから読み込む
+    Fetch CDX API data or load it from the local cache.
     Yields CDX records one by one.
     Uses resumeKey pagination for large datasets.
     
     Args:
-        target_url: 検索対象のワイルドカードURL
-        cache_file: キャッシュファイルのパス
+        target_url: Wildcard URL to search in the CDX API.
+        cache_file: Path to the local cache file.
+        initial_resume_key: resumeKey to resume from (None to start from the beginning).
+        limit: Maximum number of records to fetch per request (default: 25000).
     
     Yields:
         CDX record (List)
     """
     
     cache_valid = False
-    if os.path.exists(cache_file) and os.path.getsize(cache_file) > 0:
-        logger.info(f"キャッシュから読み込み中: {cache_file}")
+    # Skip cache if initial_resume_key is specified
+    if initial_resume_key is None and os.path.exists(cache_file) and os.path.getsize(cache_file) > 0:
+        logger.info(f"Loading from cache: {cache_file}")
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
                 first_line = f.readline().strip()
                 if first_line:
-                    json.loads(first_line)  # パース可能かチェック
+                    json.loads(first_line)  # Check that the first line is valid JSON
                     cache_valid = True
         except (json.JSONDecodeError, Exception) as e:
-            logger.warning(f"キャッシュ読み込みエラー: {e}")
-            logger.info("CDX APIから再取得します...")
+            logger.warning(f"Cache read error: {e}")
+            logger.info("Falling back to CDX API...")
             cache_valid = False
 
     if cache_valid:
@@ -157,15 +161,17 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> Generator[List, None, No
                     stripped = line.strip()
                     if stripped:
                         yield json.loads(stripped)
-            logger.info("JSONLキャッシュから全データをyieldしました")
+            logger.info("Finished yielding all records from JSONL cache")
         
-        # Generatorを返す
+        # Return the generator
         return _read_cache()
 
-    # API Fetch Mode - ストリーミング取得（遅延評価、メモリ効率的）
+    # API Fetch Mode - streaming fetch (lazy evaluation, memory-efficient)
     def _fetch_from_api():
-        """APIからストリーミング取得（Generator）"""
-        logger.info(f"CDX APIからデータを取得中: {target_url}")
+        """Stream data from the CDX API (Generator)."""
+        logger.info(f"Fetching data from CDX API: {target_url}")
+        if initial_resume_key:
+            logger.info(f"Resuming from resumeKey: {initial_resume_key}")
         
         api_url = "https://web.archive.org/cdx/search/cdx"
         params = {
@@ -175,11 +181,11 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> Generator[List, None, No
             'collapse': 'urlkey',
             'fl': 'original,timestamp',
             'showResumeKey': 'true',
-            'limit': CDX_LIMIT
+            'limit': limit
         }
         headers = {'User-Agent': USER_AGENT}
     
-        # SessionとRetry設定
+        # Configure session and retry policy
         session = requests.Session()
         retry = Retry(
             total=3,
@@ -192,123 +198,195 @@ def fetch_cdx_data(target_url: str, cache_file: str) -> Generator[List, None, No
         session.mount("https://", adapter)
         session.mount("http://", adapter)
 
-        # キャッシュファイルの親ディレクトリを作成
+        # Create parent directories for the cache file if they don't exist
         Path(cache_file).parent.mkdir(parents=True, exist_ok=True)
         
         cache_f = None
         try:
-            cache_f = open(cache_file, 'w', encoding='utf-8')
-            resume_key = None
-            seen_resume_keys = set()      # リクエストに使ったresumeKey（循環検出）
-            seen_response_keys = set()    # レスポンスが返したresumeKey（重複防止）
+            # Append if resuming, otherwise create/overwrite
+            mode = 'a' if initial_resume_key else 'w'
+            cache_f = open(cache_file, mode, encoding='utf-8')
+            resume_key = initial_resume_key
+            seen_resume_keys = set()      # Keys used in requests (cycle detection)
+            seen_response_keys = set()    # Keys seen in responses (duplicate prevention)
             total_yielded = 0
 
             while True:
                 if resume_key:
-                    # resumeKey循環検出
+                    # Detect resumeKey cycles
                     if resume_key in seen_resume_keys:
-                        logger.warning(f"resumeKey循環検出:（リクエスト側） {resume_key}")
-                        logger.info("無限ループ防止のため、ページネーションを終了します")
+                        logger.warning(f"resumeKey cycle detected (request side): {resume_key}")
+                        logger.info("Stopping pagination to prevent infinite loop")
                         break
                     seen_resume_keys.add(resume_key)
                     params['resumeKey'] = resume_key
 
-                try:
-                    response = session.get(api_url, params=params, headers=headers, timeout=300)
-                    response.raise_for_status()
-                    data = response.json()
-                except requests.exceptions.RequestException as e:
+                # Retry logic for 200 OK but non-JSON or empty responses
+                data = None
+                last_error = None
+                max_retries = 3
+
+                for attempt in range(max_retries):
+                    try:
+                        response = session.get(api_url, params=params, headers=headers, timeout=300)
+                        response.raise_for_status()
+
+                        # Also verify Content-Type and body even on 200 OK
+                        if response.status_code == 200:
+                            content_type = response.headers.get('Content-Type', '')
+                            content_length = len(response.content)
+                            response_text = response.text.strip()
+                            
+                            # Detect empty or non-JSON responses
+                            if content_length == 0 or not response_text or 'application/json' not in content_type:
+                                logger.warning(
+                                    f"Non-JSON or empty response detected (attempt {attempt + 1}/{max_retries}): "
+                                    f"status={response.status_code}, "
+                                    f"Content-Type={content_type}, "
+                                    f"content-length={content_length}"
+                                )
+                                
+                                # Only log the response body in verbose (-v) mode
+                                if logger.level == logging.DEBUG:
+                                    preview = response.text[:4096] if response.text else "(empty)"
+                                    logger.debug(f"Response preview: {preview!r}")
+                                
+                                # Retry if not at the last attempt
+                                if attempt < max_retries - 1:
+                                    wait_time = 2 ** attempt
+                                    logger.info(f"Waiting {wait_time}s before retry...")
+                                    time.sleep(wait_time)
+                                    continue
+                                else:
+                                    raise CDXAPIError("Non-JSON or empty response (max retries reached)")
+
+                        data = response.json()
+                        break
+                        
+                    except requests.exceptions.RequestException as e:
+                        last_error = e
+                        logger.warning(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt
+                            logger.info(f"Waiting {wait_time}s before retry...")
+                            time.sleep(wait_time)
+                            continue
+
+                    except json.JSONDecodeError as e:
+                        last_error = e
+                        logger.warning(
+                            f"JSON parse error (attempt {attempt + 1}/{max_retries}): {e}"
+                        )
+                        logger.warning(
+                            f"HTTP status={response.status_code if 'response' in locals() else 'N/A'}, "
+                            f"Content-Type={response.headers.get('Content-Type', 'N/A') if 'response' in locals() else 'N/A'}, "
+                            f"content-length={len(response.content) if 'response' in locals() else 0}"
+                        )
+                        
+                        # Only log the response body in verbose (-v) mode
+                        if logger.level == logging.DEBUG and 'response' in locals():
+                            preview = response.text[:4096] if response.text else "(no content)"
+                            logger.debug(f"Response preview: {preview!r}")
+                        
+                        if attempt < max_retries - 1:
+                            wait_time = 2 ** attempt
+                            logger.info(f"Waiting {wait_time}s before retry...")
+                            time.sleep(wait_time)
+                            continue
+
+                if data is None:
                     if cache_f:
                         cache_f.close()
-                    raise CDXAPIError(f"CDX API取得エラー: {e}") from e
-                except json.JSONDecodeError as e:
-                    if cache_f:
-                        cache_f.close()
-                    raise CDXAPIError(f"JSONパースエラー: {e}") from e
+                    
+                    failed_key = resume_key if resume_key else "(initial)"
+                    logger.error(f"Max retries reached. Failed at resumeKey={failed_key}")
+                    logger.error(f"You can resume with the following command:")
+                    logger.error(f"  python wbgap.py \"{target_url}\" --resume-key {failed_key}")
+                    
+                    raise CDXAPIError(f"CDX API fetch error (max retries reached): {last_error}") from last_error
             
                 if not isinstance(data, list):
                     if cache_f:
                         cache_f.close()
                     raise CDXAPIError(
-                        f"CDX APIが予期しない型のレスポンスを返しました: {type(data).__name__}. "
-                        f"リストが期待されます。"
+                        f"CDX API returned an unexpected type: {type(data).__name__}. "
+                        f"Expected a list."
                     )
 
-                # 空リストをすべて除去（末尾だけでなく全体）
+                # Remove all empty list rows (not just from the tail)
                 data = [row for row in data if row != []]
 
-                # ResumeKey検出（堅牢）
+                # Detect resumeKey robustly
                 new_resume_key = None
                 if data and isinstance(data[-1], list) and len(data[-1]) == 1:
-                    # 単一要素の配列 → resumeKey候補
+                    # A single-element array is a resumeKey candidate
                     candidate = data[-1][0]
                     if isinstance(candidate, str):
                         new_resume_key = candidate
                         data = data[:-1]
 
-                # レスポンスで既に見たresumeKeyが再度返された場合は終了
-                # （同じレスポンス/ページを再び受け取っている）
+                # Stop if a resumeKey seen in a previous response is returned again
+                # (indicates we are receiving the same page/response again)
                 if new_resume_key and new_resume_key in seen_response_keys:
-                    logger.warning(f"レスポンスで既に見たresumeKeyが再度返されました: {new_resume_key} -> 取得終了")
+                    logger.warning(f"Previously seen resumeKey returned again: {new_resume_key} -> stopping")
                     break
                 
-                # new_resume_keyを記録（レスポンス由来）
+                # Record the new resumeKey from this response
                 if new_resume_key:
                     seen_response_keys.add(new_resume_key)
 
-                # ヘッダー除去（毎チャンクで）
+                # Strip the header row from each chunk
                 if data and isinstance(data[0], list) and data[0]:
                     first_elem = data[0][0] if len(data[0]) > 0 else None
                     if first_elem in ('urlkey', 'original'):
                         data = data[1:]
 
-                # 有効なデータ行をキャッシュ追記 & yield（ストリーミング）
+                # Write valid rows to cache and yield them immediately (streaming)
                 valid_count = 0
                 for row in data:
-                    if isinstance(row, list) and len(row) >= 2:  # 有効なデータ行のみ
+                    if isinstance(row, list) and len(row) >= 2:  # Only yield valid data rows
                         cache_f.write(json.dumps(row, ensure_ascii=False) + '\n')
-                        yield row  # メモリに貯めずに即座にyield
+                        yield row  # Yield immediately without buffering in memory
                         total_yielded += 1
                         valid_count += 1
 
-                # 無限ループ防止：有効なデータが0行の場合
+                # Prevent infinite loops: stop if no valid rows were returned
                 if new_resume_key and valid_count == 0:
-                    logger.warning("有効なデータ行が0行でした")
-                    logger.info("次ページが存在しても無限ループ防止のため終了します")
+                    logger.warning("No valid data rows in this chunk")
+                    logger.info("Stopping pagination to prevent infinite loop")
                     break
 
                 if new_resume_key:
                     resume_key = new_resume_key
-                    logger.debug(f"次のチャンク: resumeKey={resume_key}")
+                    logger.debug(f"Next chunk: resumeKey={resume_key}")
                 else:
-                    logger.info(f"すべてのチャンクを取得完了 (合計 {total_yielded} レコード)")
+                    logger.info(f"All chunks fetched successfully ({total_yielded} records total)")
                     break
         finally:
             if cache_f:
                 cache_f.close()
 
-    # Generatorを返す（遅延評価）
     return _fetch_from_api()
 
 
 def extract_archived_urls(cdx_data: Iterable[List], ignore_protocol: bool,
                           sort_query: bool) -> Set[str]:
     """
-    CDXデータから正規化されたURLの集合を抽出
+    Extract a set of normalized URLs from CDX data.
     
     Args:
-        cdx_data: CDX APIのレスポンスデータ
-        ignore_protocol: プロトコル無視フラグ
-        sort_query: クエリソートフラグ
+        cdx_data: Iterable of CDX API records.
+        ignore_protocol: If True, treat http and https as equivalent.
+        sort_query: If True, sort query parameters alphabetically.
     
     Returns:
-        正規化されたURLの集合
+        A set of normalized URL strings.
     """
-    # cdx_dataがiterableでない場合は早期return
+    # Return early if cdx_data is not iterable
     try:
         iter(cdx_data)
     except TypeError:
-        logger.warning(f"cdx_dataがiterable型ではありません: {type(cdx_data).__name__}")
+        logger.warning(f"cdx_data is not iterable: {type(cdx_data).__name__}")
         return set()
     
     archived_urls = set()
@@ -316,34 +394,34 @@ def extract_archived_urls(cdx_data: Iterable[List], ignore_protocol: bool,
     is_first_row = True
     
     for row in cdx_data:
-        # 行がlistでない場合はスキップして続行（異常行を無視）
+        # Skip non-list rows (treat as malformed and ignore)
         if not isinstance(row, list):
-            logger.debug(f"非list行をスキップ: {type(row).__name__}")
+            logger.debug(f"Skipping non-list row: {type(row).__name__}")
             continue
         
-        # 空行をスキップ
+        # Skip empty rows
         if not row:
             continue
         
-        # ヘッダー行の検出と処理
+        # Detect and process the header row
         if is_first_row or (row and row[0] in ('original', 'urlkey')):
             is_first_row = False
             
-            # ヘッダー行から original カラムのインデックスを取得
+            # Determine the column index of 'original' from the header
             try:
                 original_idx = row.index('original')
-                logger.debug(f"originalカラムのインデックス: {original_idx}")
+                logger.debug(f"'original' column index: {original_idx}")
             except ValueError:
-                # fl=original,timestamp の場合、通常は0番目
-                logger.warning("'original'カラムが見つかりません。インデックス0を使用します")
+                # When fl=original,timestamp is used, index 0 is the default
+                logger.warning("'original' column not found; falling back to index 0")
                 original_idx = 0
-            continue  # ヘッダー行はスキップ
+            continue  # Skip the header row itself
         
-        # データ行の処理
+        # Process a data row
         if original_idx is not None and len(row) > original_idx:
             original_url = row[original_idx]
             
-            # URL が文字列であることを確認
+            # Ensure the URL value is a string
             if isinstance(original_url, str):
                 normalized = normalize_url(original_url, ignore_protocol, sort_query)
                 archived_urls.add(normalized)
@@ -352,26 +430,26 @@ def extract_archived_urls(cdx_data: Iterable[List], ignore_protocol: bool,
 
 
 # ========================================
-# メイン処理
+# Main logic
 # ========================================
 def detect_not_archived(input_file: str, archived_urls: Set[str],
                         ignore_protocol: bool, sort_query: bool,
                         collect_archived: bool = False) -> tuple[List[str], Optional[List[str]], int]:
     """
-    入力ファイルから未アーカイブURLを検出
+    Detect URLs in the input file that have not been archived.
     
     Args:
-        input_file: 入力URLファイルのパス
-        archived_urls: アーカイブ済みURLの集合（正規化済み）
-        ignore_protocol: プロトコル無視フラグ
-        sort_query: クエリソートフラグ
-        collect_archived: アーカイブ済みURLも収集するか（デフォルト: False）
+        input_file: Path to the input URL file.
+        archived_urls: Set of already-archived URLs (normalized).
+        ignore_protocol: If True, treat http and https as equivalent.
+        sort_query: If True, sort query parameters alphabetically.
+        collect_archived: If True, also collect the list of archived URLs (default: False).
     
     Returns:
-        tuple: (未アーカイブURLリスト, アーカイブ済みURLリストまたはNone, 入力URL総数)
+        tuple: (list of unarchived URLs, list of archived URLs or None, total input URL count)
     """
     if not os.path.exists(input_file):
-        raise InputFileError(f"入力ファイルが見つかりません: {input_file}")
+        raise InputFileError(f"Input file not found: {input_file}")
     
     not_archived = []
     archived = [] if collect_archived else None
@@ -397,20 +475,20 @@ def detect_not_archived(input_file: str, archived_urls: Set[str],
 
 
 def main() -> int:
-    """メイン処理"""
+    """Entry point for the CLI."""
     parser = argparse.ArgumentParser(
-        description='Wayback Gap Detector - アーカイブされていないURLを検出',
+        description='Wayback Gap Detector - Find URLs that have not been archived',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
-使用例:
-  python wbgap.py "https://example.com/aiueo/*"
-  python wbgap.py "https://example.com/aiueo/*" --sort-query --output result.txt
+examples:
+  python wbgap.py "https://example.com/blog/*"
+  python wbgap.py "https://example.com/blog/*" --sort-query --output result.txt
         '''
     )
     
     parser.add_argument(
         'target_url',
-        help='CDX検索対象のワイルドカードURL（例: https://example.com/path/*）'
+        help='Wildcard URL to search in the CDX API (e.g. https://example.com/path/*)'
     )
     
     parser.add_argument(
@@ -418,13 +496,13 @@ def main() -> int:
         dest='ignore_protocol',
         action='store_true',
         default=IGNORE_PROTOCOL,
-        help='http と https を同一視する（デフォルト: 有効）'
+        help='treat http and https as equivalent (default: enabled)'
     )
     parser.add_argument(
         '--no-ignore-protocol',
         dest='ignore_protocol',
         action='store_false',
-        help='http と https を区別する'
+        help='distinguish between http and https'
     )
     
     parser.add_argument(
@@ -432,34 +510,34 @@ def main() -> int:
         dest='sort_query',
         action='store_true',
         default=SORT_QUERY_PARAMS,
-        help='クエリパラメータをソートする（デフォルト: 無効）'
+        help='sort query parameters alphabetically (default: disabled)'
     )
     parser.add_argument(
         '--no-sort-query',
         dest='sort_query',
         action='store_false',
-        help='クエリパラメータの順序を維持する'
+        help='preserve the original query parameter order'
     )
     
     parser.add_argument(
         '--input',
         dest='input_file',
         default=TARGET_URL_FILE,
-        help=f'入力URLファイルのパス（デフォルト: {TARGET_URL_FILE}）'
+        help=f'path to the input URL file (default: {TARGET_URL_FILE})'
     )
     
     parser.add_argument(
         '--output',
         dest='output_file',
         default=OUTPUT_FILE,
-        help=f'出力ファイルのパス（デフォルト: {OUTPUT_FILE}）'
+        help=f'path to the output file (default: {OUTPUT_FILE})'
     )
     
     parser.add_argument(
         '--cache',
         dest='cache_file',
         default=CACHE_FILE,
-        help=f'キャッシュファイルのパス（デフォルト: {CACHE_FILE}）'
+        help=f'path to the CDX cache file (default: {CACHE_FILE})'
     )
 
     parser.add_argument(
@@ -468,18 +546,33 @@ def main() -> int:
         nargs='?',
         const=ARCHIVED_FILE,
         default=None,
-        help=f'アーカイブ済みURLの出力ファイルパス（デフォルト: {ARCHIVED_FILE}）'
+        help=f'path to write archived URLs to (default: {ARCHIVED_FILE})'
+    )
+
+    parser.add_argument(
+        '--resume-key',
+        dest='resume_key',
+        default=None,
+        help='resumeKey to resume an interrupted fetch (use the key logged at failure time)'
+    )
+
+    parser.add_argument(
+        '--limit',
+        dest='limit',
+        type=int,
+        default=CDX_LIMIT,
+        help=f'maximum number of records per API request (default: {CDX_LIMIT})'
     )
     
     parser.add_argument(
         '-v', '--verbose',
         action='store_true',
-        help='詳細なログ出力を有効化 (DEBUGレベル)'
+        help='enable verbose (DEBUG-level) logging'
     )
     
     args = parser.parse_args()
     
-    # ロガー設定
+    # Configure logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
@@ -487,9 +580,14 @@ def main() -> int:
     )
     
     try:
-        cdx_data = fetch_cdx_data(args.target_url, args.cache_file)
+        cdx_data = fetch_cdx_data(
+            args.target_url, 
+            args.cache_file, 
+            initial_resume_key=args.resume_key,
+            limit=args.limit
+        )
 
-        logger.info("CDXデータの抽出が完了しました")
+        logger.info("CDX data extraction complete")
         
         archived_urls = extract_archived_urls(
             cdx_data,
@@ -497,7 +595,7 @@ def main() -> int:
             args.sort_query
         )
         
-        logger.info(f"CDX取得件数:: {len(archived_urls)}")
+        logger.info(f"Archived URLs found in CDX: {len(archived_urls)}")
         
         not_archived, archived, total_count = detect_not_archived(
             args.input_file,
@@ -507,22 +605,22 @@ def main() -> int:
             collect_archived=bool(args.output_archived)
         )
         
-        # 出力ファイルの親ディレクトリを自動作成
+        # Create output directory if it doesn't exist
         Path(args.output_file).parent.mkdir(parents=True, exist_ok=True)
         with open(args.output_file, 'w', encoding='utf-8') as f:
             for url in not_archived:
                 f.write(url + '\n')
         
-        logger.info(f"調査対象URL数: {total_count}")
-        logger.info(f"未アーカイブ件数: {len(not_archived)}")
-        logger.info(f"結果を {args.output_file} に出力しました")
+        logger.info(f"Total input URLs: {total_count}")
+        logger.info(f"Unarchived URLs: {len(not_archived)}")
+        logger.info(f"Results written to {args.output_file}")
 
         if args.output_archived and archived is not None:
             Path(args.output_archived).parent.mkdir(parents=True, exist_ok=True)
             with open(args.output_archived, 'w', encoding='utf-8') as f:
                 for url in archived:
                     f.write(url + '\n')
-            logger.info(f"アーカイブ済みURLを {args.output_archived} に出力しました: {len(archived)} 件")
+            logger.info(f"Archived URLs written to {args.output_archived}: {len(archived)} entries")
         
         return 0
     
@@ -533,7 +631,7 @@ def main() -> int:
         logger.error(f"{e}")
         return 1
     except Exception as e:
-        logger.error(f"予期しないエラー: {e}")
+        logger.error(f"Unexpected error: {e}")
         return 1
 
 
