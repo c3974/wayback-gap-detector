@@ -98,12 +98,21 @@ python waygap.py "https://example.com/blog/*" \
 
 ### Resume an interrupted fetch
 
-If a previous run failed mid-way, the tool prints a resume command. Use `--resume-key` to continue from where it left off:
+If a previous run failed mid-way, the tool prints the `resumeKey` value. Add `--resume-key <KEY>` to your original command to continue:
 
 ```bash
+# Example - Original command that failed:
 python waygap.py "https://example.com/blog/*" \
   --input urls.txt \
-  --resume-key "20230601120000,https://example.com/blog/post-42"
+  --cache my_cache.jsonl \
+  --limit 50000
+
+# Add --resume-key to resume (KEY is printed in the error message):
+python waygap.py "https://example.com/blog/*" \
+  --input urls.txt \
+  --cache my_cache.jsonl \
+  --limit 50000 \
+  --resume-key "<RESUME_KEY>"
 ```
 
 ---
@@ -145,6 +154,8 @@ wayback-gap-detector/
 ├── waygap.py          # Main script
 ├── test_waygap.py     # Unit tests
 ├── requirements.txt  # Python dependencies
+├── .gitignore         # Git ignore rules
+├── LICENSE            # MIT License
 └── README.md         # This file
 ```
 
