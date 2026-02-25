@@ -2,14 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 Wayback Gap Detector - Unit Tests
-Tests for each feature of wbgap.py.
+Tests for each feature of waygap.py.
 """
 
 import unittest
 import os
 import json
 import tempfile
-from wbgap import (
+from waygap import (
     normalize_url,
     extract_archived_urls,
     detect_not_archived,

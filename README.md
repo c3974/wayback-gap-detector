@@ -45,7 +45,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```
-python wbgap.py TARGET_URL [OPTIONS]
+python waygap.py TARGET_URL [OPTIONS]
 ```
 
 `TARGET_URL` is a wildcard URL passed to the CDX API (e.g. `https://example.com/blog/*`).
@@ -75,13 +75,13 @@ python wbgap.py TARGET_URL [OPTIONS]
 Fetch all CDX records for `https://example.com/blog/*` and write URLs not found in the archive to `not_archived.txt`:
 
 ```bash
-python wbgap.py "https://example.com/blog/*" --input urls.txt
+python waygap.py "https://example.com/blog/*" --input urls.txt
 ```
 
 ### Custom cache and output files
 
 ```bash
-python wbgap.py "https://example.com/blog/*" \
+python waygap.py "https://example.com/blog/*" \
   --input urls.txt \
   --cache my_cache.jsonl \
   --output missing.txt
@@ -90,7 +90,7 @@ python wbgap.py "https://example.com/blog/*" \
 ### Collect archived URLs to a separate file
 
 ```bash
-python wbgap.py "https://example.com/blog/*" \
+python waygap.py "https://example.com/blog/*" \
   --input urls.txt \
   --output not_archived.txt \
   --output-archived archived.txt
@@ -101,7 +101,7 @@ python wbgap.py "https://example.com/blog/*" \
 If a previous run failed mid-way, the tool prints a resume command. Use `--resume-key` to continue from where it left off:
 
 ```bash
-python wbgap.py "https://example.com/blog/*" \
+python waygap.py "https://example.com/blog/*" \
   --input urls.txt \
   --resume-key "20230601120000,https://example.com/blog/post-42"
 ```
@@ -131,7 +131,7 @@ python -m unittest discover -v
 Or run the test file directly:
 
 ```bash
-python test_wbgap.py
+python test_waygap.py
 ```
 
 All tests are pure-Python unit tests with no external network calls (API calls are mocked).
@@ -142,9 +142,9 @@ All tests are pure-Python unit tests with no external network calls (API calls a
 
 ```
 wayback-gap-detector/
-├── wbgap.py          # Main script
+├── waygap.py          # Main script
 ├── exceptions.py     # Custom exception classes
-├── test_wbgap.py     # Unit tests
+├── test_waygap.py     # Unit tests
 ├── requirements.txt  # Python dependencies
 └── README.md         # This file
 ```

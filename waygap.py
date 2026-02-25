@@ -301,7 +301,7 @@ def fetch_cdx_data(target_url: str, cache_file: str,
                     failed_key = resume_key if resume_key else "(initial)"
                     logger.error(f"Max retries reached. Failed at resumeKey={failed_key}")
                     logger.error(f"You can resume with the following command:")
-                    logger.error(f"  python wbgap.py \"{target_url}\" --resume-key {failed_key}")
+                    logger.error(f"  python waygap.py \"{target_url}\" --resume-key {failed_key}")
                     
                     raise CDXAPIError(f"CDX API fetch error (max retries reached): {last_error}") from last_error
             
@@ -481,8 +481,8 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 examples:
-  python wbgap.py "https://example.com/blog/*"
-  python wbgap.py "https://example.com/blog/*" --sort-query --output result.txt
+  python waygap.py "https://example.com/blog/*"
+  python waygap.py "https://example.com/blog/*" --sort-query --output result.txt
         '''
     )
     
