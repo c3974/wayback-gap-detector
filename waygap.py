@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Set, List, Optional, Generator, Iterable
+from typing import Set, List, Optional, Generator, Iterable, Tuple
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
@@ -450,7 +450,7 @@ def extract_archived_urls(cdx_data: Iterable[List], ignore_protocol: bool,
 # ========================================
 def detect_not_archived(input_file: str, archived_urls: Set[str],
                         ignore_protocol: bool, sort_query: bool,
-                        collect_archived: bool = False) -> tuple[List[str], Optional[List[str]], int]:
+                        collect_archived: bool = False) -> Tuple[List[str], Optional[List[str]], int]:
     """
     Detect URLs in the input file that have not been archived.
     
