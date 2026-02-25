@@ -14,8 +14,9 @@ from waygap import (
     extract_archived_urls,
     detect_not_archived,
     fetch_cdx_data,
+    CDXAPIError,
+    InputFileError
 )
-from exceptions import CDXAPIError, InputFileError
 from unittest.mock import patch, MagicMock
 
 

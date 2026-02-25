@@ -143,7 +143,6 @@ All tests are pure-Python unit tests with no external network calls (API calls a
 ```
 wayback-gap-detector/
 ├── waygap.py          # Main script
-├── exceptions.py     # Custom exception classes
 ├── test_waygap.py     # Unit tests
 ├── requirements.txt  # Python dependencies
 └── README.md         # This file

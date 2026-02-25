@@ -20,8 +20,6 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from exceptions import CDXAPIError, InputFileError
-
 # Logger setup
 logger = logging.getLogger(__name__)
 
@@ -39,6 +37,24 @@ ARCHIVED_FILE = "archived.txt"
 USER_AGENT = "Wayback-Gap-Detector/1.0 (https://github.com/c3974/wayback-gap-detector)"
 
 CDX_LIMIT = 25000
+
+# ========================================
+# Custom Exceptions
+# ========================================
+class WaybackGapDetectorError(Exception):
+    """Base exception for Wayback Gap Detector"""
+    pass
+
+
+class CDXAPIError(WaybackGapDetectorError):
+    """CDX API related errors (network, response parsing, etc.)"""
+    pass
+
+
+class InputFileError(WaybackGapDetectorError):
+    """Input file related errors (not found, encoding issues, etc.)"""
+    pass
+
 
 # ========================================
 # URL normalization
